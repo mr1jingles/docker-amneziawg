@@ -1,5 +1,10 @@
 # Docker AmneziaWG
 
+[![Docker Build](https://github.com/AYastrebov/docker-amneziawg/actions/workflows/docker-build.yml/badge.svg)](https://github.com/AYastrebov/docker-amneziawg/actions/workflows/docker-build.yml)
+[![Docker Pulls](https://img.shields.io/docker/pulls/ghcr.io/ayastrebov/docker-amneziawg?logo=docker)](https://github.com/AYastrebov/docker-amneziawg/pkgs/container/docker-amneziawg)
+[![GitHub release (latest by date)](https://img.shields.io/github/v/release/AYastrebov/docker-amneziawg)](https://github.com/AYastrebov/docker-amneziawg/releases)
+[![License](https://img.shields.io/github/license/AYastrebov/docker-amneziawg)](LICENSE)
+
 A Docker container for running AmneziaWG, a modified version of WireGuard that provides enhanced obfuscation capabilities to bypass DPI (Deep Packet Inspection) and censorship.
 
 ## Overview
@@ -14,6 +19,8 @@ This project provides a containerized solution for running AmneziaWG VPN server/
 - 🔧 Easy configuration management
 - 🔄 Graceful shutdown handling
 - 📦 Docker Compose ready
+- 🏥 Built-in health checks
+- 🏗️ Multi-architecture support (amd64, arm64)
 
 ## Quick Start
 
@@ -21,6 +28,9 @@ This project provides a containerized solution for running AmneziaWG VPN server/
 
 - Docker
 - Docker Compose (optional)
+- **Recommended**: AmneziaWG kernel module for optimal performance
+
+> **💡 Performance Tip**: For better performance and lower CPU usage, it's highly recommended to install the AmneziaWG kernel module on your host system. See the [Kernel Module Installation](#kernel-module-installation) section below.
 
 ### Using Pre-built Image (Recommended)
 
@@ -141,6 +151,53 @@ Example:
 docker run ... amneziawg-go awg0
 ```
 
+## Kernel Module Installation
+
+For optimal performance and lower CPU usage, it's **highly recommended** to install the AmneziaWG kernel module on your host system before running the container.
+
+### Why Install the Kernel Module?
+
+- **Better Performance**: Kernel-space implementation is more efficient than userspace
+- **Lower CPU Usage**: Reduces overhead compared to the Go userspace implementation
+- **Native Integration**: Works seamlessly with existing WireGuard tooling
+
+### Installation
+
+Install the AmneziaWG kernel module from the official repository:
+
+```bash
+# Clone the kernel module repository
+git clone https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git
+cd amneziawg-linux-kernel-module
+
+# Follow the installation instructions in the repository
+# This typically involves:
+# 1. Installing kernel headers for your distribution
+# 2. Compiling and installing the module
+# 3. Loading the module
+
+# Example for Ubuntu/Debian:
+sudo apt update
+sudo apt install linux-headers-$(uname -r) build-essential
+make
+sudo make install
+sudo modprobe amneziawg
+```
+
+### Verification
+
+After installation, verify the module is loaded:
+
+```bash
+# Check if the module is loaded
+lsmod | grep amneziawg
+
+# The container will automatically use the kernel module if available
+# You can verify this in the container logs
+```
+
+> **Note**: If the kernel module is not available, the container will fall back to the userspace Go implementation automatically.
+
 ## Docker Compose Configuration
 
 The included `docker-compose.yml` provides the following configuration:
@@ -181,12 +238,22 @@ services:
 
 ```
 .
-├── Dockerfile          # Multi-stage build for AmneziaWG
-├── docker-compose.yml  # Docker Compose configuration
-├── entrypoint.sh       # Container entrypoint script
-├── awg0.conf          # Your AmneziaWG configuration (create this)
-├── LICENSE            # Project license
-└── README.md          # This file
+├── .github/
+│   ├── workflows/
+│   │   └── docker-build.yml    # CI/CD pipeline
+│   ├── ISSUE_TEMPLATE/         # Issue templates
+│   ├── pull_request_template.md # PR template
+│   └── RELEASE_TEMPLATE.md     # Release template
+├── Dockerfile                  # Multi-stage build for AmneziaWG
+├── docker-compose.yml          # Docker Compose configuration
+├── entrypoint.sh              # Container entrypoint script
+├── awg0.conf.example          # Example configuration file
+├── awg0.conf                  # Your AmneziaWG configuration (create this)
+├── CHANGELOG.md               # Version history
+├── CONTRIBUTING.md            # Contribution guidelines
+├── LICENSE                    # MIT License
+├── SECURITY.md               # Security policy
+└── README.md                 # This file
 ```
 
 ## Building from Source
@@ -300,6 +367,10 @@ docker exec amneziawg awg show
 # Show interface configuration
 docker exec amneziawg awg show awg0
 
+# Check container health status
+docker ps  # Look for "healthy" status
+docker inspect amneziawg --format='{{.State.Health.Status}}'
+
 # Manual interface management (if needed)
 docker exec amneziawg awg-quick up /etc/wireguard/awg0.conf
 docker exec amneziawg awg-quick down /etc/wireguard/awg0.conf
@@ -312,6 +383,7 @@ docker exec amneziawg awg-quick down /etc/wireguard/awg0.conf
 1. **Permission denied errors**: Ensure the container has the required capabilities and device access
 2. **Configuration not found**: Verify the configuration file is mounted correctly
 3. **Network issues**: Check that IP forwarding is enabled and firewall rules are correct
+4. **Poor performance**: Consider installing the AmneziaWG kernel module for better performance
 
 ### Debugging
 
@@ -356,6 +428,7 @@ This project is licensed under the terms specified in the LICENSE file.
 
 - [Project Repository](https://github.com/AYastrebov/docker-amneziawg)
 - [Docker Images (GitHub Packages)](https://github.com/AYastrebov/docker-amneziawg/pkgs/container/docker-amneziawg)
+- [AmneziaWG Kernel Module](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module) - **Recommended for better performance**
 - [AmneziaWG GitHub](https://github.com/amnezia-vpn/amneziawg-go)
 - [AmneziaWG Tools](https://github.com/amnezia-vpn/amneziawg-tools)
 - [Official WireGuard Documentation](https://www.wireguard.com/)

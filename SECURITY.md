@@ -14,8 +14,7 @@ We support the latest version of this Docker image. Security updates are applied
 If you discover a security vulnerability, please follow these steps:
 
 1. **Do NOT** open a public issue
-2. Email the maintainer privately at: [your-email@example.com]
-3. Include the following information:
+2. Include the following information:
    - Description of the vulnerability
    - Steps to reproduce
    - Potential impact

@@ -49,5 +49,9 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # Set the entrypoint
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
+# Add health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD awg show || exit 1
+
 # The default command is to show usage, but you'll override this
 CMD ["--help"]
