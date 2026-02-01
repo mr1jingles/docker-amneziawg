@@ -1,0 +1,96 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+
+# Display QR codes for peer configurations
+# Usage: show-peer 1 2 3        (for peer1, peer2, peer3)
+#        show-peer alice bob    (for named peers)
+#        show-peer all          (for all peers)
+
+show_peer_qr() {
+    local peer_id=$1
+    local peer_dir="/config/${peer_id}"
+    local conf_file="${peer_dir}/${peer_id}.conf"
+
+    if [[ ! -f "$conf_file" ]]; then
+        echo "ERROR: Configuration not found for peer: $peer_id"
+        echo "Expected: $conf_file"
+        return 1
+    fi
+
+    echo ""
+    echo "==============================================================================="
+    echo "PEER: ${peer_id}"
+    echo "==============================================================================="
+    echo ""
+    qrencode -t ANSIUTF8 < "$conf_file"
+    echo ""
+    echo "Config file: $conf_file"
+    echo "QR image: ${peer_dir}/${peer_id}.png"
+    echo "==============================================================================="
+    echo ""
+}
+
+show_all_peers() {
+    local found=false
+
+    # Find all peer directories
+    for peer_dir in /config/peer*; do
+        if [[ -d "$peer_dir" ]]; then
+            local peer_id
+            peer_id=$(basename "$peer_dir")
+            local conf_file="${peer_dir}/${peer_id}.conf"
+            if [[ -f "$conf_file" ]]; then
+                show_peer_qr "$peer_id"
+                found=true
+            fi
+        fi
+    done
+
+    # Also check for named peers (non-peer* directories with configs)
+    for conf_file in /config/*/*.conf; do
+        if [[ -f "$conf_file" ]]; then
+            local peer_dir
+            peer_dir=$(dirname "$conf_file")
+            local peer_id
+            peer_id=$(basename "$peer_dir")
+
+            # Skip if already shown (peer* dirs) or if it's server/wg_confs
+            if [[ "$peer_id" == peer* ]] || [[ "$peer_id" == "server" ]] || [[ "$peer_id" == "wg_confs" ]] || [[ "$peer_id" == "templates" ]]; then
+                continue
+            fi
+
+            show_peer_qr "$peer_id"
+            found=true
+        fi
+    done
+
+    if [[ "$found" == "false" ]]; then
+        echo "No peer configurations found."
+        echo "Make sure you're running in server mode with PEERS set."
+    fi
+}
+
+# Main
+if [[ $# -eq 0 ]]; then
+    echo "Usage: show-peer <peer_id> [peer_id2] [peer_id3] ..."
+    echo "       show-peer all"
+    echo ""
+    echo "Examples:"
+    echo "  show-peer 1 2 3        # Show QR for peer1, peer2, peer3"
+    echo "  show-peer alice bob    # Show QR for named peers"
+    echo "  show-peer all          # Show QR for all peers"
+    exit 1
+fi
+
+if [[ "$1" == "all" ]]; then
+    show_all_peers
+else
+    for arg in "$@"; do
+        # Check if argument is numeric (peer1, peer2, etc.)
+        if [[ "$arg" =~ ^[0-9]+$ ]]; then
+            show_peer_qr "peer${arg}"
+        else
+            show_peer_qr "$arg"
+        fi
+    done
+fi

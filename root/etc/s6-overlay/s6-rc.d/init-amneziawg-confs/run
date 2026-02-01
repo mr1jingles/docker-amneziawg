@@ -1,0 +1,395 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+
+# Generate AmneziaWG configurations from environment variables
+
+echo "**** Setting up AmneziaWG configurations ****"
+
+# Create config directories
+mkdir -p /config/wg_confs
+mkdir -p /config/server
+mkdir -p /config/templates
+
+# Set default values
+SERVERURL=${SERVERURL:-auto}
+SERVERPORT=${SERVERPORT:-51820}
+INTERNAL_SUBNET=${INTERNAL_SUBNET:-10.13.13.0}
+PEERDNS=${PEERDNS:-auto}
+ALLOWEDIPS=${ALLOWEDIPS:-0.0.0.0/0, ::/0}
+PERSISTENTKEEPALIVE_PEERS=${PERSISTENTKEEPALIVE_PEERS:-}
+LOG_CONFS=${LOG_CONFS:-true}
+INTERFACE=${INTERFACE:-wg0}
+
+# ============================================================================
+# Legacy config migration
+# ============================================================================
+migrate_legacy_config() {
+    # Check for legacy config at /config/awg0.conf
+    if [[ -f /config/awg0.conf ]] && [[ ! -f /config/wg_confs/wg0.conf ]]; then
+        echo "**** Migrating legacy config /config/awg0.conf -> /config/wg_confs/wg0.conf ****"
+        cp /config/awg0.conf /config/wg_confs/wg0.conf
+    fi
+
+    # Check for legacy config at old mount point style
+    if [[ -f /config/wg0.conf ]] && [[ ! -f /config/wg_confs/wg0.conf ]]; then
+        echo "**** Migrating legacy config /config/wg0.conf -> /config/wg_confs/wg0.conf ****"
+        cp /config/wg0.conf /config/wg_confs/wg0.conf
+    fi
+}
+
+# ============================================================================
+# Helper functions
+# ============================================================================
+
+# Generate random AWG obfuscation parameters if not set
+generate_awg_params() {
+    # Jc: Junk packet count (1-8 recommended)
+    AWG_JC=${AWG_JC:-$(shuf -i 3-8 -n 1)}
+    # Jmin: Minimum junk packet size
+    AWG_JMIN=${AWG_JMIN:-$(shuf -i 40-80 -n 1)}
+    # Jmax: Maximum junk packet size
+    AWG_JMAX=${AWG_JMAX:-$(shuf -i 500-1000 -n 1)}
+    # S1, S2: Handshake padding sizes
+    AWG_S1=${AWG_S1:-$(shuf -i 15-150 -n 1)}
+    AWG_S2=${AWG_S2:-$(shuf -i 15-150 -n 1)}
+    # H1-H4: Header obfuscation values (random 32-bit integers)
+    AWG_H1=${AWG_H1:-$(shuf -i 1-2147483647 -n 1)}
+    AWG_H2=${AWG_H2:-$(shuf -i 1-2147483647 -n 1)}
+    AWG_H3=${AWG_H3:-$(shuf -i 1-2147483647 -n 1)}
+    AWG_H4=${AWG_H4:-$(shuf -i 1-2147483647 -n 1)}
+
+    # Save params to file for persistence
+    cat > /config/server/awg_params <<EOF
+AWG_JC=$AWG_JC
+AWG_JMIN=$AWG_JMIN
+AWG_JMAX=$AWG_JMAX
+AWG_S1=$AWG_S1
+AWG_S2=$AWG_S2
+AWG_H1=$AWG_H1
+AWG_H2=$AWG_H2
+AWG_H3=$AWG_H3
+AWG_H4=$AWG_H4
+EOF
+
+    echo "**** AWG Obfuscation Parameters ****"
+    echo "  Jc=$AWG_JC, Jmin=$AWG_JMIN, Jmax=$AWG_JMAX"
+    echo "  S1=$AWG_S1, S2=$AWG_S2"
+    echo "  H1=$AWG_H1, H2=$AWG_H2, H3=$AWG_H3, H4=$AWG_H4"
+}
+
+# Load existing AWG params if they exist
+load_awg_params() {
+    if [[ -f /config/server/awg_params ]]; then
+        # shellcheck source=/dev/null
+        source /config/server/awg_params
+    fi
+}
+
+# Detect server URL if set to auto
+detect_server_url() {
+    if [[ "$SERVERURL" == "auto" ]]; then
+        echo "**** Detecting server URL ****"
+        # Try to get external IP
+        SERVERURL=$(curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null || echo "")
+        if [[ -z "$SERVERURL" ]]; then
+            echo "**** WARNING: Could not auto-detect server URL ****"
+            echo "**** Please set SERVERURL environment variable ****"
+            SERVERURL="YOUR_SERVER_IP"
+        else
+            echo "**** Detected server URL: $SERVERURL ****"
+        fi
+    fi
+}
+
+# Detect DNS if set to auto
+detect_dns() {
+    if [[ "$PEERDNS" == "auto" ]]; then
+        # Use Google DNS as fallback
+        PEERDNS="8.8.8.8, 8.8.4.4"
+        echo "**** Using DNS: $PEERDNS ****"
+    fi
+}
+
+# Generate server keypair
+generate_server_keys() {
+    if [[ ! -f /config/server/privatekey-server ]]; then
+        echo "**** Generating server keypair ****"
+        awg genkey | tee /config/server/privatekey-server | awg pubkey > /config/server/publickey-server
+        chmod 600 /config/server/privatekey-server
+    fi
+}
+
+# Generate peer keypair and preshared key
+generate_peer_keys() {
+    local peer_id=$1
+    local peer_dir="/config/${peer_id}"
+
+    mkdir -p "$peer_dir"
+
+    if [[ ! -f "${peer_dir}/privatekey-${peer_id}" ]]; then
+        echo "**** Generating keypair for peer: $peer_id ****"
+        awg genkey | tee "${peer_dir}/privatekey-${peer_id}" | awg pubkey > "${peer_dir}/publickey-${peer_id}"
+        awg genpsk > "${peer_dir}/presharedkey-${peer_id}"
+        chmod 600 "${peer_dir}/privatekey-${peer_id}" "${peer_dir}/presharedkey-${peer_id}"
+    fi
+}
+
+# Parse PEERS variable
+parse_peers() {
+    PEER_LIST=()
+
+    if [[ "$PEERS" =~ ^[0-9]+$ ]]; then
+        # Numeric: create peer1, peer2, etc.
+        for i in $(seq 1 "$PEERS"); do
+            PEER_LIST+=("peer${i}")
+        done
+    else
+        # Comma-separated names
+        IFS=',' read -ra PEER_LIST <<< "$PEERS"
+        # Trim whitespace
+        for i in "${!PEER_LIST[@]}"; do
+            PEER_LIST[$i]=$(echo "${PEER_LIST[$i]}" | xargs)
+        done
+    fi
+}
+
+# Get subnet base (e.g., 10.13.13 from 10.13.13.0)
+get_subnet_base() {
+    echo "$INTERNAL_SUBNET" | sed 's/\.[0-9]*$//'
+}
+
+# Generate server config
+generate_server_config() {
+    local subnet_base
+    subnet_base=$(get_subnet_base)
+
+    echo "**** Generating server configuration ****"
+
+    # Build server config
+    cat > /config/wg_confs/${INTERFACE}.conf <<EOF
+[Interface]
+Address = ${subnet_base}.1/24
+ListenPort = ${SERVERPORT}
+PrivateKey = $(cat /config/server/privatekey-server)
+PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth+ -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth+ -j MASQUERADE
+# AmneziaWG Obfuscation Parameters
+Jc = ${AWG_JC}
+Jmin = ${AWG_JMIN}
+Jmax = ${AWG_JMAX}
+S1 = ${AWG_S1}
+S2 = ${AWG_S2}
+H1 = ${AWG_H1}
+H2 = ${AWG_H2}
+H3 = ${AWG_H3}
+H4 = ${AWG_H4}
+EOF
+
+    # Add peers to server config
+    local peer_num=2
+    for peer_id in "${PEER_LIST[@]}"; do
+        local peer_pubkey
+        peer_pubkey=$(cat "/config/${peer_id}/publickey-${peer_id}")
+        local peer_psk
+        peer_psk=$(cat "/config/${peer_id}/presharedkey-${peer_id}")
+
+        cat >> /config/wg_confs/${INTERFACE}.conf <<EOF
+
+[Peer]
+# ${peer_id}
+PublicKey = ${peer_pubkey}
+PresharedKey = ${peer_psk}
+AllowedIPs = ${subnet_base}.${peer_num}/32
+EOF
+        ((peer_num++))
+    done
+
+    chmod 600 /config/wg_confs/${INTERFACE}.conf
+}
+
+# Generate peer config
+generate_peer_config() {
+    local peer_id=$1
+    local peer_num=$2
+    local peer_dir="/config/${peer_id}"
+    local subnet_base
+    subnet_base=$(get_subnet_base)
+
+    echo "**** Generating config for peer: $peer_id ****"
+
+    cat > "${peer_dir}/${peer_id}.conf" <<EOF
+[Interface]
+Address = ${subnet_base}.${peer_num}/32
+PrivateKey = $(cat "${peer_dir}/privatekey-${peer_id}")
+DNS = ${PEERDNS}
+# AmneziaWG Obfuscation Parameters
+Jc = ${AWG_JC}
+Jmin = ${AWG_JMIN}
+Jmax = ${AWG_JMAX}
+S1 = ${AWG_S1}
+S2 = ${AWG_S2}
+H1 = ${AWG_H1}
+H2 = ${AWG_H2}
+H3 = ${AWG_H3}
+H4 = ${AWG_H4}
+
+[Peer]
+PublicKey = $(cat /config/server/publickey-server)
+PresharedKey = $(cat "${peer_dir}/presharedkey-${peer_id}")
+Endpoint = ${SERVERURL}:${SERVERPORT}
+AllowedIPs = ${ALLOWEDIPS}
+PersistentKeepalive = 25
+EOF
+
+    chmod 600 "${peer_dir}/${peer_id}.conf"
+
+    # Generate QR code
+    qrencode -t PNG -o "${peer_dir}/${peer_id}.png" < "${peer_dir}/${peer_id}.conf"
+
+    # Show QR code in logs if enabled
+    if [[ "${LOG_CONFS}" == "true" ]]; then
+        echo ""
+        echo "==============================================================================="
+        echo "PEER: ${peer_id}"
+        echo "==============================================================================="
+        echo ""
+        qrencode -t ANSIUTF8 < "${peer_dir}/${peer_id}.conf"
+        echo ""
+        echo "Config file: /config/${peer_id}/${peer_id}.conf"
+        echo "QR image: /config/${peer_id}/${peer_id}.png"
+        echo "==============================================================================="
+        echo ""
+    fi
+}
+
+# Check if config regeneration is needed
+check_config_changes() {
+    local params_changed=false
+    local peers_changed=false
+
+    # Check AWG params
+    if [[ -f /config/server/awg_params ]]; then
+        # Compare current env vars with saved params
+        local saved_params
+        saved_params=$(cat /config/server/awg_params)
+
+        # Check each parameter
+        for param in AWG_JC AWG_JMIN AWG_JMAX AWG_S1 AWG_S2 AWG_H1 AWG_H2 AWG_H3 AWG_H4; do
+            local env_val="${!param}"
+            if [[ -n "$env_val" ]]; then
+                local saved_val
+                saved_val=$(echo "$saved_params" | grep "^${param}=" | cut -d= -f2)
+                if [[ "$env_val" != "$saved_val" ]]; then
+                    params_changed=true
+                    echo "**** AWG parameter $param changed: $saved_val -> $env_val ****"
+                fi
+            fi
+        done
+    fi
+
+    # Check if PEERS has changed
+    if [[ -f /config/server/peers_list ]]; then
+        local saved_peers
+        saved_peers=$(cat /config/server/peers_list)
+        if [[ "$PEERS" != "$saved_peers" ]]; then
+            peers_changed=true
+            echo "**** PEERS changed: $saved_peers -> $PEERS ****"
+        fi
+    fi
+
+    if [[ "$params_changed" == "true" ]] || [[ "$peers_changed" == "true" ]]; then
+        return 0  # Changes detected
+    fi
+    return 1  # No changes
+}
+
+# Save current configuration state
+save_config_state() {
+    echo "$PEERS" > /config/server/peers_list
+}
+
+# ============================================================================
+# Main logic
+# ============================================================================
+
+# First, migrate any legacy configs
+migrate_legacy_config
+
+# Check if PEERS is set (server mode)
+if [[ -n "$PEERS" ]]; then
+    echo "**** Running in SERVER mode ****"
+
+    # Parse peers
+    parse_peers
+
+    # Load existing params or generate new ones
+    if [[ -f /config/server/awg_params ]]; then
+        load_awg_params
+        # Override with any env vars that are explicitly set
+        AWG_JC=${AWG_JC:-$(grep "^AWG_JC=" /config/server/awg_params | cut -d= -f2)}
+        AWG_JMIN=${AWG_JMIN:-$(grep "^AWG_JMIN=" /config/server/awg_params | cut -d= -f2)}
+        AWG_JMAX=${AWG_JMAX:-$(grep "^AWG_JMAX=" /config/server/awg_params | cut -d= -f2)}
+        AWG_S1=${AWG_S1:-$(grep "^AWG_S1=" /config/server/awg_params | cut -d= -f2)}
+        AWG_S2=${AWG_S2:-$(grep "^AWG_S2=" /config/server/awg_params | cut -d= -f2)}
+        AWG_H1=${AWG_H1:-$(grep "^AWG_H1=" /config/server/awg_params | cut -d= -f2)}
+        AWG_H2=${AWG_H2:-$(grep "^AWG_H2=" /config/server/awg_params | cut -d= -f2)}
+        AWG_H3=${AWG_H3:-$(grep "^AWG_H3=" /config/server/awg_params | cut -d= -f2)}
+        AWG_H4=${AWG_H4:-$(grep "^AWG_H4=" /config/server/awg_params | cut -d= -f2)}
+    fi
+    generate_awg_params
+
+    # Detect server URL and DNS
+    detect_server_url
+    detect_dns
+
+    # Generate server keys
+    generate_server_keys
+
+    # Check if we need to regenerate configs
+    REGEN_CONFIGS=false
+    if [[ ! -f /config/wg_confs/${INTERFACE}.conf ]]; then
+        REGEN_CONFIGS=true
+        echo "**** No existing server config found, generating ****"
+    elif check_config_changes; then
+        REGEN_CONFIGS=true
+        echo "**** Configuration changes detected, regenerating ****"
+    fi
+
+    # Generate peer keys (always, in case new peers added)
+    for peer_id in "${PEER_LIST[@]}"; do
+        generate_peer_keys "$peer_id"
+    done
+
+    # Generate/regenerate configs if needed
+    if [[ "$REGEN_CONFIGS" == "true" ]]; then
+        generate_server_config
+
+        local peer_num=2
+        for peer_id in "${PEER_LIST[@]}"; do
+            generate_peer_config "$peer_id" "$peer_num"
+            ((peer_num++))
+        done
+    else
+        echo "**** Using existing configuration ****"
+    fi
+
+    # Save current state
+    save_config_state
+
+else
+    echo "**** Running in CLIENT mode ****"
+    echo "**** Place your configuration files in /config/wg_confs/ ****"
+
+    # Check if any configs exist
+    if ! ls /config/wg_confs/*.conf 1>/dev/null 2>&1; then
+        echo "**** WARNING: No configuration files found in /config/wg_confs/ ****"
+        echo "**** Please either:"
+        echo "****   - Set PEERS environment variable for server mode"
+        echo "****   - Mount config files to /config/wg_confs/"
+    fi
+fi
+
+# Set permissions
+lsiown -R abc:abc /config 2>/dev/null || chown -R abc:abc /config
+
+echo "**** AmneziaWG configuration complete ****"

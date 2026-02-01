@@ -1,0 +1,93 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+
+# AmneziaWG tunnel service - brings up all configured tunnels
+
+echo "**** Starting AmneziaWG tunnels ****"
+
+# Track active interfaces
+ACTIVE_INTERFACES=()
+
+# Function to bring up a single tunnel
+bring_up_tunnel() {
+    local conf_file=$1
+    local interface_name
+    interface_name=$(basename "$conf_file" .conf)
+
+    echo "**** Bringing up interface: $interface_name ****"
+
+    if awg-quick up "$conf_file"; then
+        echo "**** Interface $interface_name is up ****"
+        ACTIVE_INTERFACES+=("$conf_file")
+        return 0
+    else
+        echo "**** ERROR: Failed to bring up interface $interface_name ****"
+        return 1
+    fi
+}
+
+# Function to bring down all active tunnels
+bring_down_all() {
+    echo "**** Bringing down all AmneziaWG interfaces ****"
+    for conf_file in "${ACTIVE_INTERFACES[@]}"; do
+        local interface_name
+        interface_name=$(basename "$conf_file" .conf)
+        echo "**** Bringing down interface: $interface_name ****"
+        awg-quick down "$conf_file" 2>/dev/null || true
+    done
+}
+
+# Trap signals for graceful shutdown
+trap bring_down_all SIGTERM SIGINT
+
+# Check for config files
+CONFIG_DIR="/config/wg_confs"
+CONF_FILES=()
+
+if [[ -d "$CONFIG_DIR" ]]; then
+    while IFS= read -r -d '' conf_file; do
+        # Skip empty files
+        if [[ -s "$conf_file" ]]; then
+            CONF_FILES+=("$conf_file")
+        fi
+    done < <(find "$CONFIG_DIR" -maxdepth 1 -name "*.conf" -type f -print0 2>/dev/null | sort -z)
+fi
+
+if [[ ${#CONF_FILES[@]} -eq 0 ]]; then
+    echo "**** No configuration files found in $CONFIG_DIR ****"
+    echo "**** Waiting for configuration... ****"
+    # Keep running but don't exit - allows config to be added later
+    while true; do
+        sleep 3600 &
+        wait $!
+    done
+fi
+
+echo "**** Found ${#CONF_FILES[@]} configuration file(s) ****"
+
+# Bring up all tunnels
+FAILED=false
+for conf_file in "${CONF_FILES[@]}"; do
+    if ! bring_up_tunnel "$conf_file"; then
+        FAILED=true
+        break
+    fi
+done
+
+# If any tunnel failed, bring down all and exit
+if [[ "$FAILED" == "true" ]]; then
+    echo "**** Tunnel startup failed, bringing down all interfaces ****"
+    bring_down_all
+    exit 1
+fi
+
+# Show status
+echo "**** All tunnels are up ****"
+awg show
+
+# Keep the service running
+echo "**** AmneziaWG service running ****"
+while true; do
+    sleep 3600 &
+    wait $!
+done

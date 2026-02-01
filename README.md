@@ -5,322 +5,169 @@
 [![GitHub release](https://img.shields.io/github/v/release/AYastrebov/docker-amneziawg)](https://github.com/AYastrebov/docker-amneziawg/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A Docker container for running AmneziaWG, a modified version of WireGuard that provides enhanced obfuscation capabilities to bypass DPI (Deep Packet Inspection) and censorship.
+A Docker container for running AmneziaWG VPN with automatic configuration generation, peer management, and QR code support. Built on LinuxServer.io base images with s6-overlay process supervision.
 
-## Overview
+## Features
 
-This project provides a containerized solution for running AmneziaWG VPN server/client. It builds upon the latest AmneziaWG-go implementation and includes pre-compiled AmneziaWG tools for easy deployment.
-
-### Features
-
-- 🚀 Latest AmneziaWG-go implementation
-- 🛠️ Pre-compiled AmneziaWG tools (v1.0.20250706)
-- 🐳 Multi-stage Docker build for optimized image size
-- 🔧 Easy configuration management
-- 🔄 Graceful shutdown handling
-- 📦 Docker Compose ready
-- 🏥 Built-in health checks
-- 🏗️ Multi-architecture support (amd64, arm64)
+- **Automatic Configuration**: Generate server and peer configs from environment variables
+- **QR Code Support**: Display peer configs as QR codes for easy mobile setup
+- **AmneziaWG Obfuscation**: Built-in DPI bypass with random or custom obfuscation parameters
+- **Multi-Peer Management**: Support for numbered or named peers (e.g., `laptop,phone,tablet`)
+- **s6-overlay Supervision**: Reliable process management with graceful shutdown
+- **Dual Mode**: Server mode (auto-generate) or Client mode (manual configs)
+- **Multi-Architecture**: Supports `linux/amd64` and `linux/arm64`
 
 ## Quick Start
 
-### Prerequisites
+### Server Mode (Recommended)
 
-- Docker
-- Docker Compose (optional)
-- **Recommended**: AmneziaWG kernel module for optimal performance
+Create a VPN server with automatic peer configuration:
 
-> **💡 Performance Tip**: For better performance and lower CPU usage, it's highly recommended to install the AmneziaWG kernel module on your host system. See the [Kernel Module Installation](#kernel-module-installation) section below.
-
-### Using Pre-built Image (Recommended)
-
-The easiest way to get started is using the pre-built image from GitHub Packages:
-
-```bash
-# Pull and run the latest image
-docker run -d \
-  --name amneziawg \
-  --cap-add NET_ADMIN \
-  --cap-add SYS_MODULE \
-  --device /dev/net/tun \
-  --sysctl net.ipv4.ip_forward=1 \
-  --sysctl net.ipv4.conf.all.src_valid_mark=1 \
-  --sysctl net.ipv6.conf.all.disable_ipv6=0 \
-  -v $(pwd)/awg0.conf:/etc/wireguard/awg0.conf \
-  ghcr.io/ayastrebov/docker-amneziawg:latest awg0
-```
-
-### Using Docker Compose (Recommended)
-
-1. Clone this repository:
-```bash
-git clone https://github.com/AYastrebov/docker-amneziawg.git
-cd docker-amneziawg
-```
-
-2. Create your AmneziaWG configuration file:
-```bash
-# Create your configuration file
-cp awg0.conf.example awg0.conf
-# Edit the configuration file with your settings
-nano awg0.conf
-```
-
-3. Build and run the container:
-```bash
-docker-compose up -d
-```
-
-**Note**: The docker-compose.yml currently references a locally built image. To use the pre-built GitHub Packages image, update the `image` field in docker-compose.yml to:
-```yaml
-image: ghcr.io/ayastrebov/docker-amneziawg:latest
-```
-
-### Using Docker directly
-
-1. Use the pre-built image:
 ```bash
 docker run -d \
   --name amneziawg \
   --cap-add NET_ADMIN \
   --cap-add SYS_MODULE \
-  --device /dev/net/tun \
+  -e PUID=1000 \
+  -e PGID=1000 \
+  -e TZ=Etc/UTC \
+  -e SERVERURL=vpn.example.com \
+  -e PEERS=3 \
+  -p 51820:51820/udp \
+  -v ./config:/config \
   --sysctl net.ipv4.ip_forward=1 \
   --sysctl net.ipv4.conf.all.src_valid_mark=1 \
-  --sysctl net.ipv6.conf.all.disable_ipv6=0 \
-  -v $(pwd)/awg0.conf:/etc/wireguard/awg0.conf \
-  ghcr.io/ayastrebov/docker-amneziawg:latest awg0
+  --restart unless-stopped \
+  ghcr.io/ayastrebov/docker-amneziawg:latest
 ```
 
-Or build locally:
+View QR codes for peers:
 
-1. Build the image:
 ```bash
-docker build -t amneziawg-go .
+docker exec amneziawg /app/show-peer 1 2 3
 ```
 
-2. Run the container:
+### Client Mode
+
+Use pre-existing configuration files:
+
 ```bash
+# Place your config in ./config/wg_confs/wg0.conf
 docker run -d \
   --name amneziawg \
   --cap-add NET_ADMIN \
   --cap-add SYS_MODULE \
-  --device /dev/net/tun \
+  -v ./config:/config \
   --sysctl net.ipv4.ip_forward=1 \
   --sysctl net.ipv4.conf.all.src_valid_mark=1 \
-  --sysctl net.ipv6.conf.all.disable_ipv6=0 \
-  -v $(pwd)/awg0.conf:/etc/wireguard/awg0.conf \
-  amneziawg-go awg0
+  --restart unless-stopped \
+  ghcr.io/ayastrebov/docker-amneziawg:latest
 ```
 
-## Configuration
-
-### AmneziaWG Configuration File
-
-Create a configuration file named `awg0.conf` (or any name matching your interface) in the project directory. Here's an example:
-
-```ini
-[Interface]
-PrivateKey = <your-private-key>
-Address = 10.0.0.1/24
-ListenPort = 51820
-# AmneziaWG specific parameters
-Jc = 4
-Jmin = 50
-Jmax = 1000
-S1 = 86
-S2 = 12
-H1 = 1755269708
-H2 = 2101520157
-H3 = 1829552136
-H4 = 2016351429
-
-[Peer]
-PublicKey = <peer-public-key>
-AllowedIPs = 10.0.0.2/32
-```
-
-### Environment Variables
-
-The container accepts the following parameter:
-
-- **Interface name**: Pass as the first argument (default: `wg0`)
-
-Example:
-```bash
-docker run ... amneziawg-go awg0
-```
-
-## Kernel Module Installation
-
-For optimal performance and lower CPU usage, it's **highly recommended** to install the AmneziaWG kernel module on your host system before running the container.
-
-### Why Install the Kernel Module?
-
-- **Better Performance**: Kernel-space implementation is more efficient than userspace
-- **Lower CPU Usage**: Reduces overhead compared to the Go userspace implementation
-- **Native Integration**: Works seamlessly with existing WireGuard tooling
-
-### Installation
-
-Install the AmneziaWG kernel module from the official repository:
-
-```bash
-# Clone the kernel module repository
-git clone https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git
-cd amneziawg-linux-kernel-module
-
-# Follow the installation instructions in the repository
-# This typically involves:
-# 1. Installing kernel headers for your distribution
-# 2. Compiling and installing the module
-# 3. Loading the module
-
-# Example for Ubuntu/Debian:
-sudo apt update
-sudo apt install linux-headers-$(uname -r) build-essential
-make
-sudo make install
-sudo modprobe amneziawg
-```
-
-### Verification
-
-After installation, verify the module is loaded:
-
-```bash
-# Check if the module is loaded
-lsmod | grep amneziawg
-
-# The container will automatically use the kernel module if available
-# You can verify this in the container logs
-```
-
-> **Note**: If the kernel module is not available, the container will fall back to the userspace Go implementation automatically.
-
-## Docker Compose Configuration
-
-The included `docker-compose.yml` provides the following configuration:
-
-- **Image**: Uses locally built image by default (`amneziawg-go`)
-  - To use the pre-built GitHub Packages image, change to: `ghcr.io/ayastrebov/docker-amneziawg:latest`
-- **Capabilities**: `NET_ADMIN` and `SYS_MODULE` for network management
-- **Sysctls**: IP forwarding and routing configurations
-- **Devices**: Access to `/dev/net/tun` for tunnel interface
-- **Volumes**: Mounts your configuration file
-- **Restart policy**: `unless-stopped` for automatic restart
-
-### Using Pre-built Image
-
-To use the GitHub Packages image with Docker Compose, update your `docker-compose.yml`:
+### Docker Compose
 
 ```yaml
 services:
   amneziawg:
     image: ghcr.io/ayastrebov/docker-amneziawg:latest
     container_name: amneziawg
-    restart: unless-stopped
     cap_add:
       - NET_ADMIN
       - SYS_MODULE
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+      - SERVERURL=vpn.example.com
+      - SERVERPORT=51820
+      - PEERS=laptop,phone,tablet
+      - PEERDNS=8.8.8.8, 8.8.4.4
+      - INTERNAL_SUBNET=10.13.13.0
+      - ALLOWEDIPS=0.0.0.0/0, ::/0
+      - LOG_CONFS=true
+    volumes:
+      - ./config:/config
+    ports:
+      - 51820:51820/udp
     sysctls:
       - net.ipv4.ip_forward=1
       - net.ipv4.conf.all.src_valid_mark=1
-      - net.ipv6.conf.all.disable_ipv6=0
-    devices:
-      - /dev/net/tun
-    volumes:
-      - ./awg0.conf:/etc/wireguard/awg0.conf
-    command: awg0
+    restart: unless-stopped
 ```
 
-## File Structure
+## Environment Variables
+
+### Server Mode (when `PEERS` is set)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PEERS` | - | Number or comma-separated names (enables server mode) |
+| `SERVERURL` | `auto` | External server URL/IP (`auto` to detect) |
+| `SERVERPORT` | `51820` | Listen port |
+| `INTERNAL_SUBNET` | `10.13.13.0` | VPN subnet (peers get .2, .3, etc.) |
+| `PEERDNS` | `auto` | DNS for peers (`auto` = 8.8.8.8, 8.8.4.4) |
+| `ALLOWEDIPS` | `0.0.0.0/0, ::/0` | Peer allowed IPs |
+| `LOG_CONFS` | `true` | Show QR codes in container logs |
+| `INTERFACE` | `wg0` | Interface name |
+
+### AmneziaWG Obfuscation
+
+All obfuscation parameters are optional. If not set, random values are generated for anti-DPI protection.
+
+| Variable | Description |
+|----------|-------------|
+| `AWG_JC` | Junk packet count (recommended: 3-8) |
+| `AWG_JMIN` | Minimum junk packet size in bytes |
+| `AWG_JMAX` | Maximum junk packet size in bytes |
+| `AWG_S1` | Init packet padding size |
+| `AWG_S2` | Response packet padding size |
+| `AWG_H1` | Header obfuscation value 1 |
+| `AWG_H2` | Header obfuscation value 2 |
+| `AWG_H3` | Header obfuscation value 3 |
+| `AWG_H4` | Header obfuscation value 4 |
+
+### LinuxServer Standard
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PUID` | `1000` | User ID for file ownership |
+| `PGID` | `1000` | Group ID for file ownership |
+| `TZ` | `Etc/UTC` | Timezone |
+
+## Configuration
+
+### Volume Structure
 
 ```
-.
-├── .github/
-│   ├── workflows/
-│   │   └── docker-build.yml    # CI/CD pipeline
-│   ├── ISSUE_TEMPLATE/         # Issue templates
-│   ├── pull_request_template.md # PR template
-│   └── RELEASE_TEMPLATE.md     # Release template
-├── Dockerfile                  # Multi-stage build for AmneziaWG
-├── docker-compose.yml          # Docker Compose configuration
-├── entrypoint.sh              # Container entrypoint script
-├── awg0.conf.example          # Example configuration file
-├── awg0.conf                  # Your AmneziaWG configuration (create this)
-├── CHANGELOG.md               # Version history
-├── CONTRIBUTING.md            # Contribution guidelines
-├── LICENSE                    # MIT License
-├── SECURITY.md               # Security policy
-└── README.md                 # This file
+./config/
+├── wg_confs/           # WireGuard config files (auto-generated or manual)
+│   └── wg0.conf        # Server config (interface)
+├── server/             # Server keys and params (auto-generated)
+│   ├── privatekey-server
+│   ├── publickey-server
+│   └── awg_params      # Saved AWG obfuscation parameters
+├── peer1/              # Peer configs (auto-generated)
+│   ├── peer1.conf
+│   ├── peer1.png       # QR code image
+│   ├── privatekey-peer1
+│   ├── publickey-peer1
+│   └── presharedkey-peer1
+└── laptop/             # Named peer example
+    ├── laptop.conf
+    └── laptop.png
 ```
 
-## Building from Source
+### Manual Configuration (Client Mode)
 
-> **Note**: Pre-built images are available on GitHub Packages. Building from source is only necessary if you need to customize the build or contribute to the project.
-
-The project uses GitHub Actions to automatically build and publish Docker images to GitHub Packages. You can use the pre-built images with:
-
-```bash
-docker pull ghcr.io/ayastrebov/docker-amneziawg:latest
-```
-
-### Manual Build
-
-The Dockerfile uses a multi-stage build:
-
-1. **Builder stage**: Compiles AmneziaWG-go from source
-2. **Runtime stage**: Creates minimal Alpine-based image with pre-compiled tools
-
-### Build Arguments
-
-- `AWGTOOLS_RELEASE`: Version of AmneziaWG tools to download (default: "1.0.20250706")
-
-Example with custom tools version:
-```bash
-docker build --build-arg AWGTOOLS_RELEASE=1.0.20250706 -t amneziawg-go .
-```
-
-## Usage Examples
-
-### Server Configuration
-
-For a server setup, your configuration might look like:
+Place your configuration files in `./config/wg_confs/`:
 
 ```ini
+# ./config/wg_confs/wg0.conf
 [Interface]
-PrivateKey = <server-private-key>
-Address = 10.0.0.1/24
-ListenPort = 51820
-PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
-# AmneziaWG obfuscation parameters
-Jc = 4
-Jmin = 50
-Jmax = 1000
-S1 = 86
-S2 = 12
-H1 = 1755269708
-H2 = 2101520157
-H3 = 1829552136
-H4 = 2016351429
-
-[Peer]
-PublicKey = <client-public-key>
-AllowedIPs = 10.0.0.2/32
-```
-
-### Client Configuration
-
-For a client setup:
-
-```ini
-[Interface]
-PrivateKey = <client-private-key>
-Address = 10.0.0.2/24
-DNS = 8.8.8.8, 8.8.4.4
-# AmneziaWG obfuscation parameters (must match server)
+PrivateKey = <your-private-key>
+Address = 10.0.0.2/32
+DNS = 8.8.8.8
+# AmneziaWG parameters (must match server)
 Jc = 4
 Jmin = 50
 Jmax = 1000
@@ -333,102 +180,178 @@ H4 = 2016351429
 
 [Peer]
 PublicKey = <server-public-key>
-Endpoint = <server-ip>:51820
+Endpoint = vpn.example.com:51820
 AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 25
 ```
 
 ## Commands
 
-### Container Management
+### Show Peer QR Codes
 
 ```bash
-# Start the service
-docker-compose up -d
+# By number
+docker exec amneziawg /app/show-peer 1 2 3
 
-# Stop the service
-docker-compose down
+# By name
+docker exec amneziawg /app/show-peer laptop phone tablet
 
-# View logs
-docker-compose logs -f
-
-# Restart the service
-docker-compose restart
+# All peers
+docker exec amneziawg /app/show-peer all
 ```
 
-### WireGuard Management
-
-Inside the container, you can use standard WireGuard commands with `awg` prefix:
+### Check Status
 
 ```bash
-# Check interface status
+# Interface status
 docker exec amneziawg awg show
 
-# Show interface configuration
-docker exec amneziawg awg show awg0
+# Container logs
+docker logs amneziawg
 
-# Check container health status
-docker ps  # Look for "healthy" status
+# Health check
 docker inspect amneziawg --format='{{.State.Health.Status}}'
+```
 
-# Manual interface management (if needed)
-docker exec amneziawg awg-quick up /etc/wireguard/awg0.conf
-docker exec amneziawg awg-quick down /etc/wireguard/awg0.conf
+### Manual Interface Control
+
+```bash
+# Bring down interface
+docker exec amneziawg awg-quick down /config/wg_confs/wg0.conf
+
+# Bring up interface
+docker exec amneziawg awg-quick up /config/wg_confs/wg0.conf
+```
+
+## Migration from Previous Version
+
+If you're upgrading from the previous simple entrypoint version:
+
+### Automatic Migration
+
+The container automatically migrates legacy configs:
+- `/config/awg0.conf` → `/config/wg_confs/wg0.conf`
+- `/config/wg0.conf` → `/config/wg_confs/wg0.conf`
+
+### Manual Migration
+
+1. Update your volume mount:
+   ```yaml
+   # Old
+   volumes:
+     - ./awg0.conf:/etc/wireguard/awg0.conf
+
+   # New
+   volumes:
+     - ./config:/config
+   ```
+
+2. Move your config file:
+   ```bash
+   mkdir -p ./config/wg_confs
+   mv ./awg0.conf ./config/wg_confs/wg0.conf
+   ```
+
+3. Remove the `command:` line from your docker-compose.yml (no longer needed)
+
+## Kernel Module
+
+For optimal performance, install the AmneziaWG kernel module on your host:
+
+```bash
+git clone https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git
+cd amneziawg-linux-kernel-module
+sudo apt install linux-headers-$(uname -r) build-essential  # Debian/Ubuntu
+make && sudo make install
+sudo modprobe amneziawg
+```
+
+The container automatically detects and uses:
+1. `amneziawg` kernel module (preferred)
+2. `wireguard` kernel module (compatibility mode)
+3. `amneziawg-go` userspace (fallback)
+
+## Building
+
+### Local Build
+
+```bash
+docker build -t amneziawg .
+```
+
+### Multi-Architecture Build
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 -t amneziawg .
+```
+
+## Project Structure
+
+```
+docker-amneziawg/
+├── Dockerfile                              # Multi-stage build
+├── docker-compose.yml                      # Example configuration
+├── root/
+│   ├── app/
+│   │   └── show-peer                       # QR code display utility
+│   ├── defaults/
+│   │   ├── server.conf                     # Server template
+│   │   └── peer.conf                       # Peer template
+│   └── etc/s6-overlay/s6-rc.d/
+│       ├── init-amneziawg-module/          # Kernel module validation
+│       ├── init-amneziawg-confs/           # Config generation
+│       └── svc-amneziawg/                  # Tunnel service
+├── awg0.conf.example                       # Example config
+└── README.md
 ```
 
 ## Troubleshooting
 
-### Common Issues
+### No configuration files found
 
-1. **Permission denied errors**: Ensure the container has the required capabilities and device access
-2. **Configuration not found**: Verify the configuration file is mounted correctly
-3. **Network issues**: Check that IP forwarding is enabled and firewall rules are correct
-4. **Poor performance**: Consider installing the AmneziaWG kernel module for better performance
+Ensure you either:
+- Set `PEERS` environment variable for server mode
+- Place `.conf` files in `./config/wg_confs/`
 
-### Debugging
+### Permission denied
 
-Enable debug output:
-```bash
-# View container logs
-docker-compose logs -f amneziawg
-
-# Check interface status
-docker exec amneziawg ip addr show
-
-# Test connectivity
-docker exec amneziawg ping <peer-ip>
+Check that capabilities are set:
+```yaml
+cap_add:
+  - NET_ADMIN
+  - SYS_MODULE
 ```
 
-## Security Considerations
+### Tunnel fails to start
 
-- Keep your private keys secure and never commit them to version control
-- Use strong, randomly generated keys
-- Regularly update the container image for security patches
-- Consider using Docker secrets for sensitive configuration data
+Check container logs:
+```bash
+docker logs amneziawg
+```
 
-## Contributing
+Verify sysctl settings:
+```yaml
+sysctls:
+  - net.ipv4.ip_forward=1
+  - net.ipv4.conf.all.src_valid_mark=1
+```
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
+### QR code not displaying
 
-## License
-
-This project is licensed under the terms specified in the LICENSE file.
-
-## Acknowledgments
-
-- [AmneziaVPN](https://github.com/amnezia-vpn) for the AmneziaWG implementation
-- [WireGuard](https://www.wireguard.com/) for the original protocol
-- Alpine Linux for providing a minimal base image
+Ensure `LOG_CONFS=true` is set, or use:
+```bash
+docker exec amneziawg /app/show-peer all
+```
 
 ## Links
 
-- [Project Repository](https://github.com/AYastrebov/docker-amneziawg)
-- [Docker Images (GitHub Packages)](https://github.com/AYastrebov/docker-amneziawg/pkgs/container/docker-amneziawg)
-- [AmneziaWG Kernel Module](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module) - **Recommended for better performance**
-- [AmneziaWG GitHub](https://github.com/amnezia-vpn/amneziawg-go)
+- [GitHub Repository](https://github.com/AYastrebov/docker-amneziawg)
+- [Docker Images](https://github.com/AYastrebov/docker-amneziawg/pkgs/container/docker-amneziawg)
+- [AmneziaWG Kernel Module](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module)
+- [AmneziaWG-go](https://github.com/amnezia-vpn/amneziawg-go)
 - [AmneziaWG Tools](https://github.com/amnezia-vpn/amneziawg-tools)
-- [Official WireGuard Documentation](https://www.wireguard.com/)
+- [LinuxServer.io](https://www.linuxserver.io/)
+
+## License
+
+MIT License - see [LICENSE](LICENSE) file.

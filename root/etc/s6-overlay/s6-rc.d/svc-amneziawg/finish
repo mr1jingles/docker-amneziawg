@@ -1,0 +1,24 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+
+# Graceful shutdown - bring down all tunnels
+
+echo "**** Stopping AmneziaWG tunnels ****"
+
+CONFIG_DIR="/config/wg_confs"
+
+# Find and bring down all active interfaces
+if [[ -d "$CONFIG_DIR" ]]; then
+    for conf_file in "$CONFIG_DIR"/*.conf; do
+        if [[ -f "$conf_file" ]]; then
+            interface_name=$(basename "$conf_file" .conf)
+            # Check if interface is actually up
+            if ip link show "$interface_name" &>/dev/null; then
+                echo "**** Bringing down interface: $interface_name ****"
+                awg-quick down "$conf_file" 2>/dev/null || true
+            fi
+        fi
+    done
+fi
+
+echo "**** AmneziaWG tunnels stopped ****"

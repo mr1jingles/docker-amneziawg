@@ -1,10 +1,17 @@
-name: Build and Upload Docker Image
+name: Build and Push Docker Image
 
 on:
   workflow_dispatch:
   push:
+    branches:
+      - master
+      - main
     tags:
       - 'v*'
+  pull_request:
+    branches:
+      - master
+      - main
 
 env:
   REGISTRY: ghcr.io
@@ -22,19 +29,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Log in to the Container registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -46,18 +40,63 @@ jobs:
             [worker.oci]
               max-parallelism = 2
 
+      - name: Log in to the Container registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # Set latest tag for default branch
+            type=raw,value=latest,enable={{is_default_branch}}
+            # Tag with branch name
+            type=ref,event=branch
+            # Tag with PR number
+            type=ref,event=pr
+            # Tag with git tag (v1.0.0 -> 1.0.0)
+            type=semver,pattern={{version}}
+            # Tag with major.minor (v1.0.0 -> 1.0)
+            type=semver,pattern={{major}}.{{minor}}
+            # Tag with major (v1.0.0 -> 1)
+            type=semver,pattern={{major}}
+            # Tag with short sha
+            type=sha,prefix=sha-
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ github.workflow }}
           cache-to: type=gha,mode=max,scope=${{ github.workflow }}
           build-args: |
             BUILDKIT_INLINE_CACHE=1
-          outputs: type=registry
           provenance: false
           sbom: false
+
+      - name: Test image (PR only)
+        if: github.event_name == 'pull_request'
+        run: |
+          # Build for local testing (single platform)
+          docker buildx build --platform linux/amd64 --load -t test-image .
+
+          # Basic smoke test - check binaries exist
+          docker run --rm test-image ls -la /usr/bin/awg /usr/bin/awg-quick /usr/bin/amneziawg-go
+
+          # Check s6-overlay structure
+          docker run --rm test-image ls -la /etc/s6-overlay/s6-rc.d/
+
+          # Check show-peer script
+          docker run --rm test-image test -x /app/show-peer
+
+          echo "Smoke tests passed!"

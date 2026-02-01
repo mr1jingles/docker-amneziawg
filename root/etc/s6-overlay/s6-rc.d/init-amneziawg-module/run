@@ -1,0 +1,40 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+
+# Validate AmneziaWG/WireGuard kernel module or userspace support
+
+echo "**** Checking for AmneziaWG/WireGuard support ****"
+
+AWG_MODULE_TYPE="none"
+
+# Check for amneziawg kernel module first (preferred)
+if lsmod 2>/dev/null | grep -q "^amneziawg"; then
+    echo "**** AmneziaWG kernel module detected ****"
+    AWG_MODULE_TYPE="amneziawg-kernel"
+elif modprobe amneziawg 2>/dev/null; then
+    echo "**** AmneziaWG kernel module loaded successfully ****"
+    AWG_MODULE_TYPE="amneziawg-kernel"
+# Check for wireguard kernel module (compatible mode)
+elif lsmod 2>/dev/null | grep -q "^wireguard"; then
+    echo "**** WireGuard kernel module detected (compatibility mode) ****"
+    AWG_MODULE_TYPE="wireguard-kernel"
+elif modprobe wireguard 2>/dev/null; then
+    echo "**** WireGuard kernel module loaded successfully (compatibility mode) ****"
+    AWG_MODULE_TYPE="wireguard-kernel"
+# Fall back to userspace (amneziawg-go)
+elif [[ -x /usr/bin/amneziawg-go ]]; then
+    echo "**** Using userspace amneziawg-go (no kernel module available) ****"
+    AWG_MODULE_TYPE="userspace"
+else
+    echo "**** ERROR: No AmneziaWG/WireGuard support available ****"
+    echo "**** Please either:"
+    echo "****   - Install amneziawg kernel module on host"
+    echo "****   - Install wireguard kernel module on host"
+    echo "****   - Ensure amneziawg-go binary is present"
+    exit 1
+fi
+
+# Save module type for other services
+echo "$AWG_MODULE_TYPE" > /run/s6/container_environment/AWG_MODULE_TYPE
+
+echo "**** AmneziaWG module type: $AWG_MODULE_TYPE ****"

@@ -1,57 +1,86 @@
-# Dockerfile for amneziawg-go and amneziawg-tools
+# Dockerfile for AmneziaWG with LinuxServer.io architecture
+# Multi-stage build: compile amneziawg-go, awg-tools, then create runtime image
 
-# ---- Builder Stage ----
-# This stage compiles a static amneziawg-go binary.
-FROM golang:1.24.4-alpine AS builder
+# ============================================================================
+# Stage 1: Compile amneziawg-go
+# ============================================================================
+FROM golang:1.24.4-alpine AS go-builder
 
-# Install build dependencies for cgo (build-base) and git
 RUN apk add --no-cache git build-base
 
-# Clone the amneziawg-go repository
 WORKDIR /src
 RUN git clone https://github.com/amnezia-vpn/amneziawg-go.git .
-
-# Build a static binary, enabling cgo for static linking.
 RUN CGO_ENABLED=1 go build -ldflags '-linkmode external -extldflags "-fno-PIC -static"' -v -o amneziawg-go
 
-# ---- Runtime Stage ----
-# This stage creates the final image using pre-compiled tools.
-# Using alpine:3.19 to match the pre-compiled tools version.
-FROM alpine:3.19
+# ============================================================================
+# Stage 2: Compile awg-tools from source
+# ============================================================================
+FROM alpine:3.21 AS tools-builder
 
-# Define the release version of amneziawg-tools to download
-ARG AWGTOOLS_RELEASE="1.0.20250903"
+RUN apk add --no-cache git build-base linux-headers
 
-# Install runtime dependencies and tools for downloading
-RUN apk --no-cache add iproute2 iptables bash wget unzip openresolv
+WORKDIR /src
+RUN git clone https://github.com/amnezia-vpn/amneziawg-tools.git .
+WORKDIR /src/src
+RUN make && make install DESTDIR=/tools-install
 
-# Download and install pre-compiled amneziawg-tools
-RUN cd /usr/bin/ && \
-    wget https://github.com/amnezia-vpn/amneziawg-tools/releases/download/v${AWGTOOLS_RELEASE}/alpine-3.19-amneziawg-tools.zip && \
-    unzip -j alpine-3.19-amneziawg-tools.zip && \
-    rm alpine-3.19-amneziawg-tools.zip && \
-    chmod +x /usr/bin/awg /usr/bin/awg-quick && \
-    # Add symbolic links for compatibility with standard wg commands
-    ln -s /usr/bin/awg /usr/bin/wg && \
-    ln -s /usr/bin/awg-quick /usr/bin/wg-quick && \
-    sed -i 's|\[\[ $proto == -4 \]\] && cmd sysctl -q net\.ipv4\.conf\.all\.src_valid_mark=1|[[ $proto == -4 ]] \&\& [[ $(sysctl -n net.ipv4.conf.all.src_valid_mark) != 1 ]] \&\& cmd sysctl -q net.ipv4.conf.all.src_valid_mark=1|' /usr/bin/awg-quick
+# ============================================================================
+# Stage 3: Runtime image using LinuxServer base
+# ============================================================================
+FROM ghcr.io/linuxserver/baseimage-alpine:3.21
 
-# Copy the compiled amneziawg-go binary from the builder stage
-COPY --from=builder /src/amneziawg-go /usr/bin/
+# Set labels
+LABEL maintainer="AYastrebov"
+LABEL org.opencontainers.image.source="https://github.com/AYastrebov/docker-amneziawg"
+LABEL org.opencontainers.image.description="AmneziaWG VPN container with LinuxServer.io architecture"
+LABEL org.opencontainers.image.licenses="MIT"
 
-# Create a directory for WireGuard configurations
-RUN mkdir -p /etc/wireguard
+# Install runtime dependencies
+RUN \
+  echo "**** install dependencies ****" && \
+  apk add --no-cache \
+    iproute2 \
+    iptables \
+    ip6tables \
+    openresolv \
+    libqrencode-tools \
+    kmod \
+    bash \
+    grep \
+    coreutils && \
+  echo "**** create directories ****" && \
+  mkdir -p /config/wg_confs && \
+  echo "**** cleanup ****" && \
+  rm -rf /tmp/*
 
-# Copy the entrypoint script
-COPY entrypoint.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/entrypoint.sh
+# Copy compiled binaries from builder stages
+COPY --from=go-builder /src/amneziawg-go /usr/bin/
+COPY --from=tools-builder /tools-install/usr/bin/awg /usr/bin/
+COPY --from=tools-builder /tools-install/usr/bin/awg-quick /usr/bin/
 
-# Set the entrypoint
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+# Create symlinks for WireGuard compatibility
+RUN \
+  ln -sf /usr/bin/awg /usr/bin/wg && \
+  ln -sf /usr/bin/awg-quick /usr/bin/wg-quick && \
+  chmod +x /usr/bin/awg /usr/bin/awg-quick /usr/bin/amneziawg-go
 
-# Add health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD awg show || exit 1
+# Apply awg-quick sysctl patch to avoid errors when sysctl is already set
+RUN sed -i 's|\[\[ $proto == -4 \]\] && cmd sysctl -q net\.ipv4\.conf\.all\.src_valid_mark=1|[[ $proto == -4 ]] \&\& [[ $(sysctl -n net.ipv4.conf.all.src_valid_mark) != 1 ]] \&\& cmd sysctl -q net.ipv4.conf.all.src_valid_mark=1|' /usr/bin/awg-quick
 
-# The default command is to show usage, but you'll override this
-CMD ["--help"]
+# Create symlink for /etc/wireguard -> /config/wg_confs
+RUN \
+  rm -rf /etc/wireguard && \
+  ln -sf /config/wg_confs /etc/wireguard
+
+# Copy root filesystem (s6-overlay services, defaults, scripts)
+COPY root/ /
+
+# Expose WireGuard port
+EXPOSE 51820/udp
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+  CMD awg show 2>/dev/null || exit 1
+
+# Volumes
+VOLUME /config
