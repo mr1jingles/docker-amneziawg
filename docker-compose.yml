@@ -34,11 +34,13 @@ services:
       # - LOG_CONFS=true                    # Show QR codes in logs
 
       # ---- AmneziaWG Obfuscation (optional - random if not set) ----
-      # - AWG_JC=4                          # Junk packet count (1-8)
-      # - AWG_JMIN=50                       # Min jitter ms
-      # - AWG_JMAX=1000                     # Max jitter ms
-      # - AWG_S1=86                         # Packet size param
-      # - AWG_S2=12                         # Packet size param
+      # - AWG_JC=4                          # Junk packet count (3-8 recommended)
+      # - AWG_JMIN=50                       # Min junk packet size
+      # - AWG_JMAX=1000                     # Max junk packet size
+      # - AWG_S1=86                         # Init packet padding
+      # - AWG_S2=12                         # Response packet padding
+      # - AWG_S3=0                          # Cookie message padding
+      # - AWG_S4=0                          # Transport packet padding
       # - AWG_H1=1755269708                 # Header obfuscation
       # - AWG_H2=2101520157                 # Header obfuscation
       # - AWG_H3=1829552136                 # Header obfuscation

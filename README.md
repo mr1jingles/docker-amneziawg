@@ -121,6 +121,8 @@ All obfuscation parameters are optional. If not set, random values are generated
 | `AWG_JMAX` | Maximum junk packet size in bytes |
 | `AWG_S1` | Init packet padding size |
 | `AWG_S2` | Response packet padding size |
+| `AWG_S3` | Cookie message padding size (default: 0) |
+| `AWG_S4` | Transport packet padding size (default: 0) |
 | `AWG_H1` | Header obfuscation value 1 |
 | `AWG_H2` | Header obfuscation value 2 |
 | `AWG_H3` | Header obfuscation value 3 |
@@ -173,6 +175,8 @@ Jmin = 50
 Jmax = 1000
 S1 = 86
 S2 = 12
+S3 = 0
+S4 = 0
 H1 = 1755269708
 H2 = 2101520157
 H3 = 1829552136
