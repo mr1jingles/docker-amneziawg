@@ -15,6 +15,7 @@ A Docker container for running AmneziaWG VPN with automatic configuration genera
 - **Multi-Peer Management**: Support for numbered or named peers (e.g., `laptop,phone,tablet`)
 - **s6-overlay Supervision**: Reliable process management with graceful shutdown
 - **Dual Mode**: Server mode (auto-generate) or Client mode (manual configs)
+- **[Advanced Hub Mode](ADVANCED_AWG_HUB.md)**: Run server + client in one container with upstream VPN routing and failover
 - **Multi-Architecture**: Supports `linux/amd64` and `linux/arm64`
 
 ## Quick Start
@@ -562,7 +563,9 @@ docker exec amneziawg /app/show-peer all
 - [AmneziaWG Kernel Module](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module)
 - [AmneziaWG-go](https://github.com/amnezia-vpn/amneziawg-go)
 - [AmneziaWG Tools](https://github.com/amnezia-vpn/amneziawg-tools)
+- [Advanced AWG Hub Guide](ADVANCED_AWG_HUB.md) — run server + client in one container for censorship bypass proxy
 - [LinuxServer docker-wireguard](https://github.com/linuxserver/docker-wireguard) (inspiration for this project)
+- [LinuxServer Advanced WireGuard Hub](https://www.linuxserver.io/blog/advanced-wireguard-hub) (inspiration for the hub guide)
 - [LinuxServer.io](https://www.linuxserver.io/)
 
 ## License
