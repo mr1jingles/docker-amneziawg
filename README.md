@@ -9,10 +9,13 @@ A Docker container for running AmneziaWG VPN with automatic configuration genera
 
 ## Features
 
+- **AWG 2.0 by Default**: Full AmneziaWG 2.0 support with Custom Protocol Signatures (I1-I5), S3/S4 padding, and auto-generated TLS-like DPI evasion out of the box
+- **AWG 1.5 Fallback**: Set `AWG_VERSION=1.5` for legacy client compatibility (AmneziaVPN < 4.8.12.9)
 - **Automatic Configuration**: Generate server and peer configs from environment variables
 - **QR Code Support**: Display peer configs as QR codes for easy mobile setup
-- **AmneziaWG Obfuscation**: Built-in DPI bypass with random or custom obfuscation parameters
+- **CoreDNS Integration**: Built-in DNS server for peers (auto-enabled in server mode)
 - **Multi-Peer Management**: Support for numbered or named peers (e.g., `laptop,phone,tablet`)
+- **Per-Peer Options**: `PERSISTENTKEEPALIVE_PEERS` and `SERVER_ALLOWEDIPS_PEER_X` for site-to-site VPN
 - **s6-overlay Supervision**: Reliable process management with graceful shutdown
 - **Dual Mode**: Server mode (auto-generate) or Client mode (manual configs)
 - **[Advanced Hub Mode](ADVANCED_AWG_HUB.md)**: Run server + client in one container with upstream VPN routing and failover
@@ -29,6 +32,7 @@ docker run -d \
   --name amneziawg \
   --cap-add NET_ADMIN \
   --cap-add SYS_MODULE \
+  --device /dev/net/tun:/dev/net/tun \
   -e PUID=1000 \
   -e PGID=1000 \
   -e TZ=Etc/UTC \
@@ -58,6 +62,7 @@ docker run -d \
   --name amneziawg \
   --cap-add NET_ADMIN \
   --cap-add SYS_MODULE \
+  --device /dev/net/tun:/dev/net/tun \
   -v ./config:/config \
   --sysctl net.ipv4.ip_forward=1 \
   --sysctl net.ipv4.conf.all.src_valid_mark=1 \
@@ -75,6 +80,8 @@ services:
     cap_add:
       - NET_ADMIN
       - SYS_MODULE
+    devices:
+      - /dev/net/tun:/dev/net/tun
     environment:
       - PUID=1000
       - PGID=1000
@@ -82,10 +89,12 @@ services:
       - SERVERURL=vpn.example.com
       - SERVERPORT=51820
       - PEERS=laptop,phone,tablet
-      - PEERDNS=8.8.8.8, 8.8.4.4
+      - PEERDNS=auto
       - INTERNAL_SUBNET=10.13.13.0
       - ALLOWEDIPS=0.0.0.0/0, ::/0
+      - PERSISTENTKEEPALIVE_PEERS=all
       - LOG_CONFS=true
+      # - AWG_VERSION=2.0      # "2.0" (default) or "1.5" for legacy clients
     volumes:
       - ./config:/config
     ports:
@@ -106,11 +115,18 @@ services:
 | `SERVERURL` | `auto` | External server URL/IP (`auto` to detect) |
 | `SERVERPORT` | `51820` | Listen port |
 | `INTERNAL_SUBNET` | `10.13.13.0` | VPN subnet (peers get .2, .3, etc.) |
-| `PEERDNS` | `auto` | DNS for peers (`auto` = 8.8.8.8, 8.8.4.4) |
+| `PEERDNS` | `auto` | DNS for peers (`auto` = container DNS at SUBNET.1) |
 | `ALLOWEDIPS` | `0.0.0.0/0, ::/0` | Peer allowed IPs |
-| `PERSISTENTKEEPALIVE_PEERS` | `25` | PersistentKeepalive interval for peers (seconds) |
+| `PERSISTENTKEEPALIVE_PEERS` | - | Which peers get keepalive: `all` or comma-separated names/numbers |
+| `SERVER_ALLOWEDIPS_PEER_X` | - | Per-peer server AllowedIPs for site-to-site (e.g., `SERVER_ALLOWEDIPS_PEER_laptop=192.168.1.0/24`) |
 | `LOG_CONFS` | `true` | Show QR codes in container logs |
-| `INTERFACE` | `wg0` | Interface name |
+| `USE_COREDNS` | `true` (server) | Enable CoreDNS for peer DNS resolution; `false` in client mode |
+
+### AmneziaWG Protocol Version
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AWG_VERSION` | `2.0` | Protocol version: `2.0` (full DPI evasion with I1-I5 signatures) or `1.5` (legacy, compatible with AmneziaVPN < 4.8.12.9) |
 
 ### AmneziaWG Obfuscation
 
@@ -134,8 +150,8 @@ Padding bytes are added to handshake and transport messages to obscure their tru
 |----------|---------|-------------|-------------|
 | `AWG_S1` | Random 15-150 | ≤ 1132, S1+56 ≠ S2 | Bytes added to handshake initiation message |
 | `AWG_S2` | Random 15-150 | ≤ 1188, S1+56 ≠ S2 | Bytes added to handshake response message |
-| `AWG_S3` | 0 | - | Bytes added to cookie reply message |
-| `AWG_S4` | 0 | - | Bytes added to transport data messages |
+| `AWG_S3` | Random 15-150 (2.0) / 0 (1.5) | - | Bytes added to cookie reply message |
+| `AWG_S4` | Random 15-150 (2.0) / 0 (1.5) | - | Bytes added to transport data messages |
 
 #### Header Obfuscation
 
@@ -156,7 +172,7 @@ Custom Protocol Signature (CPS) packets sent before handshakes to masquerade VPN
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AWG_I1` | (empty) | First signature packet definition |
+| `AWG_I1` | TLS Client Hello (2.0) / empty (1.5) | First signature packet definition (auto-generated in AWG 2.0) |
 | `AWG_I2` | (empty) | Second signature packet (requires I1) |
 | `AWG_I3` | (empty) | Third signature packet (requires I1) |
 | `AWG_I4` | (empty) | Fourth signature packet (requires I1) |
@@ -166,17 +182,18 @@ See [AmneziaWG Kernel Module Configuration](https://github.com/amnezia-vpn/amnez
 
 #### Recommended Values
 
-For most DPI bypass scenarios, the auto-generated random values work well. If you need specific values (e.g., to match an existing setup):
+For most DPI bypass scenarios, the auto-generated random values work well. AWG 2.0 (default) auto-generates a TLS Client Hello I1 signature and random S3/S4 padding. If you need specific values (e.g., to match an existing setup):
 
 ```yaml
 environment:
-  - AWG_JC=4        # 3-8 recommended
+  - AWG_VERSION=2.0  # Default; set to 1.5 for legacy clients
+  - AWG_JC=4         # 3-8 recommended
   - AWG_JMIN=50
   - AWG_JMAX=1000
   - AWG_S1=86
   - AWG_S2=12
-  - AWG_S3=0        # Usually not needed
-  - AWG_S4=0        # Usually not needed
+  - AWG_S3=25        # AWG 2.0 cookie padding
+  - AWG_S4=15        # AWG 2.0 transport padding
   - AWG_H1=1755269708
   - AWG_H2=2101520157
   - AWG_H3=1829552136
@@ -228,10 +245,10 @@ To create custom signatures that mimic real protocols:
 #### Compatibility Notes
 
 - **I1 is required** - I2-I5 only work when I1 is set
-- Requires AWG 2.0 compatible kernel module or `amneziawg-go` userspace
-- Requires AWG 2.0 compatible clients (AmneziaVPN 4.x+)
+- **AWG 2.0** (default) auto-generates I1 with a TLS Client Hello signature — override with custom value or set `AWG_VERSION=1.5` to disable
+- Requires AWG 2.0 compatible clients (AmneziaVPN 4.8.12.9+)
 - Server and all clients must have matching I1-I5 values
-- Leave I1-I5 empty for standard AWG mode (backward compatible)
+- Set `AWG_VERSION=1.5` for backward compatibility with older clients (disables I1-I5, sets S3=S4=0)
 
 ### LinuxServer Standard
 
@@ -247,21 +264,27 @@ To create custom signatures that mimic real protocols:
 
 ```
 ./config/
-├── wg_confs/           # WireGuard config files (auto-generated or manual)
-│   └── wg0.conf        # Server config (interface)
-├── server/             # Server keys and params (auto-generated)
+├── wg_confs/             # WireGuard config files (auto-generated or manual)
+│   └── wg0.conf          # Server config (interface)
+├── server/               # Server keys and params (auto-generated)
 │   ├── privatekey-server
 │   ├── publickey-server
-│   └── awg_params      # Saved AWG obfuscation parameters
-├── peer1/              # Peer configs (auto-generated)
+│   └── awg_params        # Saved AWG obfuscation parameters
+├── templates/            # User-customizable config templates
+│   ├── server.conf       # Server template (eval+heredoc expanded)
+│   └── peer.conf         # Peer template (eval+heredoc expanded)
+├── coredns/              # CoreDNS configuration
+│   └── Corefile          # CoreDNS config (auto-copied from defaults)
+├── .donoteditthisfile    # Saved env vars for change detection
+├── peer1/                # Numeric peer (PEERS=3)
 │   ├── peer1.conf
-│   ├── peer1.png       # QR code image
+│   ├── peer1.png         # QR code image
 │   ├── privatekey-peer1
 │   ├── publickey-peer1
 │   └── presharedkey-peer1
-└── laptop/             # Named peer example
-    ├── laptop.conf
-    └── laptop.png
+└── peer_laptop/          # Named peer (PEERS=laptop,phone)
+    ├── peer_laptop.conf
+    └── peer_laptop.png
 ```
 
 ### Manual Configuration (Client Mode)
@@ -304,9 +327,6 @@ docker exec amneziawg /app/show-peer 1 2 3
 
 # By name
 docker exec amneziawg /app/show-peer laptop phone tablet
-
-# All peers
-docker exec amneziawg /app/show-peer all
 ```
 
 ### Check Status
@@ -375,10 +395,11 @@ make && sudo make install
 sudo modprobe amneziawg
 ```
 
-The container automatically detects and uses:
-1. `amneziawg` kernel module (preferred)
-2. `wireguard` kernel module (compatibility mode)
-3. `amneziawg-go` userspace (fallback)
+The container automatically detects support via `ip link add type wireguard`:
+1. WireGuard/AmneziaWG kernel module (preferred — if the test succeeds, no userspace binary needed)
+2. `amneziawg-go` userspace (fallback — auto-exported as `WG_QUICK_USERSPACE_IMPLEMENTATION`)
+
+If the kernel module is already loaded, you can safely remove the `SYS_MODULE` capability from your container.
 
 ## Building
 
@@ -398,18 +419,21 @@ docker buildx build --platform linux/amd64,linux/arm64 -t amneziawg .
 
 ```
 docker-amneziawg/
-├── Dockerfile                              # Multi-stage build
+├── Dockerfile                              # 3-stage multi-arch build
 ├── docker-compose.yml                      # Example configuration
 ├── root/
 │   ├── app/
 │   │   └── show-peer                       # QR code display utility
 │   ├── defaults/
-│   │   ├── server.conf                     # Server template
-│   │   └── peer.conf                       # Peer template
+│   │   ├── server.conf                     # Server template (eval+heredoc)
+│   │   ├── peer.conf                       # Peer template (eval+heredoc)
+│   │   └── Corefile                        # CoreDNS default config
 │   └── etc/s6-overlay/s6-rc.d/
-│       ├── init-amneziawg-module/          # Kernel module validation
+│       ├── init-adduser/branding           # Custom container branding
+│       ├── init-amneziawg-module/          # Kernel module detection
 │       ├── init-amneziawg-confs/           # Config generation
-│       └── svc-amneziawg/                  # Tunnel service
+│       ├── svc-coredns/                    # CoreDNS service (longrun)
+│       └── svc-amneziawg/                  # Tunnel service (oneshot up/down)
 ├── awg0.conf.example                       # Example config
 └── README.md
 ```
@@ -552,7 +576,7 @@ sysctls:
 
 Ensure `LOG_CONFS=true` is set, or use:
 ```bash
-docker exec amneziawg /app/show-peer all
+docker exec amneziawg /app/show-peer 1 2 3
 ```
 
 ## Links

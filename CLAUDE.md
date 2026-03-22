@@ -44,18 +44,19 @@ Runtime creates compatibility symlinks: `wg → awg`, `wg-quick → awg-quick`, 
 ### s6-overlay service chain
 
 ```
-init-amneziawg-module (oneshot) → init-amneziawg-confs (oneshot) → svc-amneziawg (longrun)
+init-config (LSIO) → init-amneziawg-module (oneshot) → init-amneziawg-confs (oneshot) → svc-coredns (longrun) → svc-amneziawg (oneshot)
 ```
 
-- **init-amneziawg-module**: Detects kernel module (amneziawg → wireguard → amneziawg-go userspace fallback)
-- **init-amneziawg-confs**: All config generation logic (~460 lines). Server mode generates keys, wg0.conf, peer configs, QR codes. Client mode just checks for existing configs.
-- **svc-amneziawg**: Calls `awg-quick up` for each `.conf` file. Traps SIGTERM for graceful shutdown. `finish` script tears down any remaining interfaces.
+- **init-amneziawg-module**: Tests kernel support via `ip link add dev test type wireguard`. Falls back to `amneziawg-go` userspace (exports `WG_QUICK_USERSPACE_IMPLEMENTATION`).
+- **init-amneziawg-confs**: Config generation using eval+heredoc template expansion from `/config/templates/`. Server mode generates keys, wg0.conf, peer configs, QR codes. Client mode disables CoreDNS.
+- **svc-coredns**: Longrun CoreDNS service with `notification-fd 3` health checks. Auto-disabled if port 53 already bound or `USE_COREDNS=false`.
+- **svc-amneziawg**: Oneshot service (up/down scripts). Validates `[Interface]` in each .conf, activates tunnels, saves active confs to `/run/activeconfs` via `declare -p`. Finish script tears down in reverse order.
 
 Dependencies are declared via empty files in `dependencies.d/`. Services are registered via empty files in `user/contents.d/`.
 
 ### Config persistence
 
-AWG obfuscation params are saved to `/config/server/awg_params` and reloaded on restart. Configs only regenerate if `PEERS` or AWG params change (compared against saved state).
+All env vars are saved to `/config/.donoteditthisfile` (LinuxServer pattern) for change detection on restart. AWG obfuscation params are additionally saved to `/config/server/awg_params` and loaded as fallback (via `grep`/`cut`, NOT `source` — to preserve env var priority). Configs only regenerate if any saved var differs from the current value.
 
 ## Key Development Patterns
 
@@ -66,16 +67,18 @@ AWG obfuscation params are saved to `/config/server/awg_params` and reloaded on 
 - Use `lsiown -R abc:abc /config` for ownership (LinuxServer helper), fallback to `chown`
 
 ### Adding a new environment variable
-1. Set default in `init-amneziawg-confs/run` (top section)
-2. If persistent: add to `generate_awg_params()` save block AND `load_awg_params()` section
-3. Use in `generate_server_config()` and/or `generate_peer_config()`
-4. Document in `docker-compose.yml` (commented example) and `README.md`
+1. Set default in `init-amneziawg-confs/run` main logic section
+2. If persistent: add to `save_vars()` (as `ORIG_X`) AND the change detection `if` block
+3. For AWG params: also add to `generate_awg_params()` save block AND `load_awg_params()` grep section
+4. For config output: add to templates in `root/defaults/` (eval+heredoc expanded) or `append_awg_signatures()`
+5. Document in `docker-compose.yml` (commented example) and `README.md`
 
 ### AWG obfuscation parameters
 All clients and server must use identical values. Key constraints:
+- `AWG_VERSION`: `"2.0"` (default, S3/S4 random, I1 auto-generated) or `"1.5"` (S3=S4=0, no I1-I5)
 - `Jmin < Jmax`, `Jmax ≤ 1280`
 - `S1 ≤ 1132`, `S2 ≤ 1188`, `S1+56 ≠ S2`
-- `H1-H4` must be unique, all ≥ 5 (values 1-4 are standard WireGuard headers)
+- `H1-H4` must be unique, all ≥ 5 (values 1-4 are standard WireGuard headers). AWG 2.0 supports range syntax (e.g., `H1=100-999`)
 - `I1-I5` (AWG 2.0 signatures) use tag syntax with `=` signs — parse with `cut -d= -f2-` not `-f2`
 - Detailed parameter reference: `.claude/skills/docker-amneziawg/references/awg-parameters.md`
 
@@ -84,7 +87,7 @@ All clients and server must use identical values. Key constraints:
 - Commit messages: conventional commits (`feat:`, `fix:`, `docs:`, `chore:`)
 - Branch naming: `feature/your-feature-name`
 - Indentation: 4 spaces for shell scripts and s6-overlay files, 2 spaces for Dockerfile and YAML (see `.editorconfig`)
-- `root/defaults/server.conf` and `peer.conf` are reference templates only — the generation script uses heredocs with direct variable interpolation, not template substitution
+- `root/defaults/server.conf` and `peer.conf` are eval+heredoc templates — they use `${VAR}` and `$(cat ...)` syntax that gets expanded at runtime via `eval "$(printf %s) cat <<DUDE ... DUDE"` (matching LinuxServer docker-wireguard pattern). Users can customize templates in `/config/templates/`
 
 ## CI/CD
 
@@ -99,3 +102,8 @@ GitHub Actions at `.github/workflows/docker-build.yml`:
 - `awg-quick` is a bash script, not compiled — it's copied from upstream `src/wg-quick/linux.bash`
 - Exit code 137 on container stop is normal (SIGKILL), not an error
 - The Dockerfile patches `awg-quick` to skip setting `src_valid_mark` sysctl if already set
+- Do NOT use `source` to load `awg_params` — it overrides Docker env vars. Use `grep`/`cut` with `${VAR:-fallback}` pattern
+- Peer naming: numeric peers → `peer1`, `peer2`; named peers → `peer_laptop`, `peer_phone` (underscore prefix, matching LinuxServer)
+- `INTERFACE` is derived from `INTERNAL_SUBNET` (e.g., `10.13.13` from `10.13.13.0`) — not a separate env var
+- `svc-amneziawg` is a oneshot (not longrun) — tunnels stay up without a running process
+- Container branding: `root/etc/s6-overlay/s6-rc.d/init-adduser/branding` + `LSIO_FIRST_PARTY=false` in Dockerfile
