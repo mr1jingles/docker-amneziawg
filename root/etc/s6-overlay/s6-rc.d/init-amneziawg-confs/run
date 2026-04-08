@@ -167,11 +167,40 @@ load_awg_params() {
 # Append I1-I5 to a config file if set
 append_awg_signatures() {
     local conf_file=$1
-    [[ -n "$AWG_I1" ]] && echo "I1 = ${AWG_I1}" >> "$conf_file"
-    [[ -n "$AWG_I2" ]] && echo "I2 = ${AWG_I2}" >> "$conf_file"
-    [[ -n "$AWG_I3" ]] && echo "I3 = ${AWG_I3}" >> "$conf_file"
-    [[ -n "$AWG_I4" ]] && echo "I4 = ${AWG_I4}" >> "$conf_file"
-    [[ -n "$AWG_I5" ]] && echo "I5 = ${AWG_I5}" >> "$conf_file"
+    local tmp_file
+
+    tmp_file=$(mktemp) || return 1
+
+    awk -v i1="$AWG_I1" \
+        -v i2="$AWG_I2" \
+        -v i3="$AWG_I3" \
+        -v i4="$AWG_I4" \
+        -v i5="$AWG_I5" '
+        /^I[1-5][[:space:]]*=/ { next }
+
+        /^\[Interface\]/ { has_interface=1 }
+
+        /^\[Peer\]/ && has_interface && !done {
+            if (i1 != "") print "I1 = " i1
+            if (i2 != "") print "I2 = " i2
+            if (i3 != "") print "I3 = " i3
+            if (i4 != "") print "I4 = " i4
+            if (i5 != "") print "I5 = " i5
+            done=1
+        }
+
+        { print }
+
+        END {
+            if (has_interface && !done) {
+                if (i1 != "") print "I1 = " i1
+                if (i2 != "") print "I2 = " i2
+                if (i3 != "") print "I3 = " i3
+                if (i4 != "") print "I4 = " i4
+                if (i5 != "") print "I5 = " i5
+            }
+        }
+    ' "$conf_file" > "$tmp_file" && mv "$tmp_file" "$conf_file"
 }
 
 # ============================================================================
@@ -340,7 +369,7 @@ if [[ -n "$PEERS" ]]; then
     INTERNAL_SUBNET=${INTERNAL_SUBNET:-10.13.13.0}
     echo "**** Internal subnet is set to $INTERNAL_SUBNET ****"
     INTERFACE=$(echo "$INTERNAL_SUBNET" | awk 'BEGIN{FS=OFS="."} NF--')
-    ALLOWEDIPS=${ALLOWEDIPS:-0.0.0.0/0, ::/0}
+    ALLOWEDIPS=${ALLOWEDIPS:-0.0.0.0/0,::/0}
     echo "**** AllowedIPs for peers $ALLOWEDIPS ****"
     if [[ -z "$PEERDNS" ]] || [[ "$PEERDNS" = "auto" ]]; then
         PEERDNS="${INTERFACE}.1"
