@@ -9,6 +9,10 @@ on:
     - cron: '0 6 * * *'  # Daily at 06:00 UTC
   workflow_dispatch:
 
+concurrency:
+  group: upstream-check
+  cancel-in-progress: false
+
 permissions:
   contents: write
   packages: write
@@ -39,11 +43,19 @@ jobs:
 
           # Get latest amneziawg-tools release
           TOOLS_VERSION=$(gh release list --repo "$TOOLS_REPO" --limit 1 --json tagName --jq '.[0].tagName')
+          if [[ -z "$TOOLS_VERSION" || ! "$TOOLS_VERSION" =~ ^v?[0-9]+\.[0-9]+ ]]; then
+            echo "::error::Failed to fetch valid amneziawg-tools version (got: '${TOOLS_VERSION}')"
+            exit 1
+          fi
           echo "Latest amneziawg-tools: ${TOOLS_VERSION}" >> "$GITHUB_STEP_SUMMARY"
           echo "tools_version=${TOOLS_VERSION}" >> "$GITHUB_OUTPUT"
 
           # Get latest amneziawg-go tag (no releases, uses tags)
           GO_VERSION=$(gh api "repos/${GO_REPO}/tags" --jq '.[0].name')
+          if [[ -z "$GO_VERSION" || ! "$GO_VERSION" =~ ^v?[0-9]+\.[0-9]+ ]]; then
+            echo "::error::Failed to fetch valid amneziawg-go version (got: '${GO_VERSION}')"
+            exit 1
+          fi
           echo "Latest amneziawg-go: ${GO_VERSION}" >> "$GITHUB_STEP_SUMMARY"
           echo "go_version=${GO_VERSION}" >> "$GITHUB_OUTPUT"
 
@@ -112,14 +124,14 @@ jobs:
           COMMIT_MSG="chore: bump upstream versions"
           BODY=""
           if [[ "${{ needs.check-upstream.outputs.tools_changed }}" == "true" ]]; then
-            BODY="${BODY}\n- amneziawg-tools: ${TOOLS_VER}"
+            BODY="${BODY}"$'\n'"- amneziawg-tools: ${TOOLS_VER}"
           fi
           if [[ "${{ needs.check-upstream.outputs.go_changed }}" == "true" ]]; then
-            BODY="${BODY}\n- amneziawg-go: ${GO_VER}"
+            BODY="${BODY}"$'\n'"- amneziawg-go: ${GO_VER}"
           fi
 
           git add Dockerfile
-          git commit -m "${COMMIT_MSG}" -m "$(echo -e ${BODY})"
+          git commit -m "${COMMIT_MSG}" -m "${BODY}"
           git push
 
       - name: Trigger build workflow

@@ -6,9 +6,22 @@ description: |
 
 # docker-amneziawg Development Guide
 
+## Documentation Layout
+
+| File | Audience | Purpose |
+|------|----------|---------|
+| `README.md` | End users | Setup, usage, parameters (LinuxServer-style) |
+| `CONTEXT.md` | AI agents | Architecture, parameter deep-dives, troubleshooting, CI/CD |
+| `CLAUDE.md` | Developers | Dev patterns, conventions, gotchas, build/test commands |
+
+For architecture details, parameter constraints, or troubleshooting tables, read `CONTEXT.md`.
+For AWG parameter implementation specifics, read [references/awg-parameters.md](references/awg-parameters.md).
+
 ## Project Overview
 
 AmneziaWG Docker container built on LinuxServer.io base images with s6-overlay process supervision. Provides automatic VPN configuration generation with DPI-bypass obfuscation.
+
+Two modes: **server** (set `PEERS` to auto-generate configs) and **client** (place `.conf` files in `/config/wg_confs/`).
 
 ## Project Structure
 
@@ -16,107 +29,68 @@ AmneziaWG Docker container built on LinuxServer.io base images with s6-overlay p
 docker-amneziawg/
 ├── Dockerfile                    # Multi-stage build (go-builder, tools-builder, runtime)
 ├── docker-compose.yml            # Example configurations
+├── CONTEXT.md                    # Technical reference for AI agents
 ├── root/
 │   ├── app/
 │   │   └── show-peer             # QR code display utility
 │   ├── defaults/
-│   │   ├── server.conf           # Server config template (reference only)
-│   │   └── peer.conf             # Peer config template (reference only)
+│   │   ├── server.conf           # Server config template (eval+heredoc)
+│   │   ├── peer.conf             # Peer config template (eval+heredoc)
+│   │   └── Corefile              # CoreDNS default config
 │   └── etc/s6-overlay/s6-rc.d/
 │       ├── init-amneziawg-module/    # Kernel module detection (oneshot)
 │       ├── init-amneziawg-confs/     # Config generation (oneshot)
-│       ├── svc-amneziawg/            # Tunnel service (longrun)
+│       ├── svc-coredns/              # CoreDNS service (longrun)
+│       ├── svc-amneziawg/            # Tunnel service (oneshot up/down)
 │       └── user/contents.d/          # Service registration (empty files)
-└── .github/workflows/docker-build.yml
+└── .github/workflows/
+    ├── docker-build.yml              # Main build pipeline (multi-arch)
+    └── upstream-check.yml            # Daily upstream version check
 ```
 
 ## S6-Overlay Architecture
 
-### Service Types
-- **oneshot**: Runs once at startup. Files: `type` (contains "oneshot"), `up` (path to run script), `run`
-- **longrun**: Runs continuously. Files: `type` (contains "longrun"), `run`, `finish`
-
 ### Service Dependency Chain
 ```
-init-amneziawg-module → init-amneziawg-confs → svc-coredns (longrun) → svc-amneziawg (oneshot)
+init-amneziawg-module (oneshot) -> init-amneziawg-confs (oneshot) -> svc-coredns (longrun) -> svc-amneziawg (oneshot)
 ```
 
-Note: `svc-amneziawg` is a **oneshot** — tunnels stay up without a running process after startup.
-
-Define dependencies via empty files in `dependencies.d/` named after the dependency service.
-
-Register services by creating empty files in `user/contents.d/` named after the service.
+Key points:
+- `svc-amneziawg` is a **oneshot** — tunnels stay up without a running process
+- `svc-coredns` is a **longrun** — continuously serves DNS for peers
+- Dependencies: empty files in `dependencies.d/`. Registration: empty files in `user/contents.d/`
 
 ### Script Requirements
 - Shebang: `#!/usr/bin/with-contenv bash`
 - Must be executable (`chmod +x`)
 - Use `lsiown` for LinuxServer permission management
 
-## Dockerfile Build Stages
+## Key Environment Variables
 
-| Stage | Purpose |
-|-------|---------|
-| `go-builder` | Compile `amneziawg-go` static binary from source |
-| `tools-builder` | Compile `awg` binary + copy `awg-quick` from `src/wg-quick/linux.bash` |
-| `runtime` | LinuxServer base + deps + binaries + `root/` filesystem |
-
-**awg-quick patch** (avoid sysctl errors when already set):
-```bash
-sed -i 's|\[\[ $proto == -4 \]\] && cmd sysctl -q net\.ipv4\.conf\.all\.src_valid_mark=1|[[ $proto == -4 ]] \&\& [[ $(sysctl -n net.ipv4.conf.all.src_valid_mark) != 1 ]] \&\& cmd sysctl -q net.ipv4.conf.all.src_valid_mark=1|'
-```
-
-## Config Generation
-
-### Operating Modes
-- **Server mode**: `PEERS` env var set → auto-generates server + peer configs with QR codes
-- **Client mode**: No `PEERS` → uses manual configs from `/config/wg_confs/`
-
-### Key Environment Variables
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PEERS` | - | Enables server mode. Number ("3") or names ("laptop,phone") |
 | `SERVERURL` | auto | Server URL/IP for peer configs |
-| `SERVERPORT` | 51820 | Listen port |
+| `SERVERPORT` | 51820 | Port advertised to peers. Use <= 9999 if ISP blocks high UDP |
 | `INTERNAL_SUBNET` | 10.13.13.0 | VPN subnet (.1 = server, .2+ = peers) |
-| `PEERDNS` | auto | DNS for peers (auto = 8.8.8.8, 8.8.4.4) |
+| `PEERDNS` | auto | DNS for peers (auto = container's CoreDNS at subnet.1) |
 | `LOG_CONFS` | true | Show QR codes in container logs |
+| `AWG_VERSION` | 2.0 | Protocol version: 2.0 (full DPI evasion) or 1.5 (legacy, AmneziaVPN < 4.8.12.9) |
 
-### Generated File Structure
-```
-/config/
-├── wg_confs/wg0.conf          # Server interface config
-├── server/
-│   ├── privatekey-server
-│   ├── publickey-server
-│   └── awg_params             # Persisted obfuscation values
-└── <peer_name>/
-    ├── <peer_name>.conf
-    ├── <peer_name>.png        # QR code image
-    ├── privatekey-<peer_name>
-    ├── publickey-<peer_name>
-    └── presharedkey-<peer_name>
-```
+## AmneziaWG Obfuscation — Quick Reference
 
-## AmneziaWG Obfuscation
+For detailed parameter docs, see [references/awg-parameters.md](references/awg-parameters.md) or `CONTEXT.md`.
 
-For detailed parameter documentation, see [references/awg-parameters.md](references/awg-parameters.md).
+| Param | Default | Key Constraint |
+|-------|---------|----------------|
+| `AWG_S1` | Random 15-150 | <= 1132, **S1+56 must not equal S2** |
+| `AWG_S2` | Random 15-150 | <= 1188 |
+| `AWG_S3` | Random 8-55 (2.0) / 0 (1.5) | <= 64 |
+| `AWG_S4` | Random 4-27 (2.0) / 0 (1.5) | <= 32, **per-packet overhead — keep small** |
+| `AWG_H1-H4` | Range (2.0) / int (1.5) | >= 5, all unique, non-overlapping |
+| `AWG_I1-I5` | Auto QUIC Initial (2.0) / empty (1.5) | In `[Interface]` before `[Peer]` |
 
-**Quick reference (AWG 2.0 defaults):**
-| Param | Purpose | Default | Notes |
-|-------|---------|---------|-------|
-| `AWG_JC` | Junk packet count before handshake | Random 3-8 | |
-| `AWG_JMIN` | Min junk packet size (bytes) | Random 40-80 | |
-| `AWG_JMAX` | Max junk packet size (bytes) | Random 80-250 | ≤1280 |
-| `AWG_S1` | Init packet padding | Random 15-150 | ≤1132, S1+56≠S2 |
-| `AWG_S2` | Response packet padding | Random 15-150 | ≤1188 |
-| `AWG_S3` | Cookie message padding | Random 8-55 (2.0) / 0 (1.5) | ≤64, rare packets |
-| `AWG_S4` | Transport packet padding | Random 4-27 (2.0) / 0 (1.5) | ≤32, **per-packet overhead — keep small** |
-| `AWG_H1-H4` | Header obfuscation | Range format e.g. `90666522-140666522` (2.0) / int (1.5) | Non-overlapping quadrants |
-| `AWG_I1-I5` | CPS signature packets | Auto TLS ClientHello (2.0) / empty (1.5) | In `[Interface]` before `[Peer]` |
-
-**Critical**: All clients and server must use identical S1-S4, H1-H4, I1-I5 values. Jc/Jmin/Jmax may differ.
-
-**S4 warning**: S4 adds overhead to every data packet. Values >32 will noticeably hurt throughput.
+**Critical**: Server and all clients must use identical S1-S4, H1-H4, I1-I5 values. Jc/Jmin/Jmax may differ.
 
 ## Common Development Tasks
 
@@ -129,28 +103,17 @@ For detailed parameter documentation, see [references/awg-parameters.md](referen
 
 ### Testing Changes
 ```bash
-# Build image
 docker build -t amneziawg-test .
-
-# Run server mode test
-docker run -d --name awg-test \
-  --cap-add NET_ADMIN \
-  -e PEERS=2 \
-  -e SERVERURL=test.example.com \
-  -v /tmp/awg-test:/config \
-  amneziawg-test
-
-# Verify
+docker run -d --name awg-test --cap-add NET_ADMIN \
+  -e PEERS=2 -e SERVERURL=test.example.com \
+  -v /tmp/awg-test:/config amneziawg-test
 docker logs awg-test
 docker exec awg-test cat /config/wg_confs/wg0.conf
 docker exec awg-test cat /config/peer1/peer1.conf
-docker exec awg-test /app/show-peer 1
-
-# Cleanup
 docker rm -f awg-test
 ```
 
-**Note**: Tunnel startup will fail without `--device /dev/net/tun` - this is expected in testing.
+Tunnel startup fails without `--device /dev/net/tun` — expected in testing.
 
 ## Common Gotchas
 
@@ -159,20 +122,24 @@ docker rm -f awg-test
 | `local: can only be used in a function` | Remove `local` keyword from main script body |
 | awg-quick not found in build | Copy from `src/wg-quick/linux.bash`, not compiled |
 | Service not starting | Check: executable bit, shebang, registered in `user/contents.d/` |
-| Exit code 137 | Normal - container was stopped (SIGKILL) |
-| Permission errors on /config | Use `lsiown -R abc:abc /config` |
-| I1-I5 must be in `[Interface]`, not `[Peer]` | Use `append_awg_signatures_to_interface()` (awk insertion before `[Peer]`) for peer confs |
-| `cut -d= -f2` truncates I-params with `=` | Use `cut -d= -f2-` for I1-I5 (tag syntax contains `=` signs) |
-| Loading `awg_params` with `source` | Never — it overrides Docker env vars. Use `grep`/`cut` with `${VAR:-fallback}` |
-| S4 too large (e.g. 124) | S4 pads every data packet; use 4-27. Large values kill throughput |
-| Amnezia app shows AWG 1.5 instead of 2.0 | H1-H4 must use range format (e.g. `90666522-140666522`), not single integers |
+| Exit code 137 | Normal — container was stopped (SIGKILL) |
+| I1-I5 must be in `[Interface]`, not `[Peer]` | Use `append_awg_signatures_to_interface()` for peer confs |
+| `cut -d= -f2` truncates I-params with `=` | Use `cut -d= -f2-` (tag syntax contains `=` signs) |
+| Loading `awg_params` with `source` | Never — overrides Docker env vars. Use `grep`/`cut` with `${VAR:-fallback}` |
+| Amnezia app shows AWG 1.5 instead of 2.0 | H1-H4 must use range format, not single integers |
 | `SERVERPORT` mapping in Docker | Map as `SERVERPORT:51820/udp` — container always listens on 51820 internally |
 
-## GitHub Actions Workflow
+## GitHub Actions Workflows
 
-Triggers:
-- Push to `master`/`main` → builds and tags as `latest`
-- Push `v*` tags → semantic version tags (1.0.0, 1.0, 1)
-- Pull requests → build + smoke test (no push)
+### docker-build.yml
+- Push to `master`/`main` -> builds multi-arch and tags as `latest` + tools version
+- Push `v*` tags -> semantic version tags (1.0.0, 1.0, 1)
+- Pull requests -> single-platform smoke test (no push)
+- `workflow_dispatch` accepts version overrides
+
+### upstream-check.yml
+- Daily at 06:00 UTC: compares Dockerfile ARG defaults against latest upstream releases
+- Auto-updates Dockerfile and triggers build if new version found
+- Has concurrency control and version format validation
 
 Multi-arch: `linux/amd64`, `linux/arm64`

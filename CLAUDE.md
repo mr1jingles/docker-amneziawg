@@ -80,7 +80,7 @@ All clients and server must use identical values. Key constraints:
 - `S1 ≤ 1132`, `S2 ≤ 1188`, `S1+56 ≠ S2`, `S3 ≤ 64`, `S4 ≤ 32` (S4 is per-packet overhead — keep small)
 - `H1-H4` must be unique, all ≥ 5 (values 1-4 are standard WireGuard headers). **AWG 2.0 generates non-overlapping quadrant range pairs by default** (e.g., `H1=90666522-140666522`) — the Amnezia app uses range format to identify AWG 2.0; single integers cause it to report AWG 1.5. AWG 1.5 keeps single integers.
 - `I1-I5` (AWG 2.0 signatures) use tag syntax with `=` signs — parse with `cut -d= -f2-` not `-f2`
-- Detailed parameter reference: `.claude/skills/docker-amneziawg/references/awg-parameters.md`
+- Detailed parameter reference: `CONTEXT.md` (architecture, parameters, troubleshooting) and `.claude/skills/docker-amneziawg/references/awg-parameters.md`
 
 ## Conventions
 
