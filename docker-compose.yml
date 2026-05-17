@@ -16,7 +16,10 @@ services:
     #   dockerfile: Dockerfile
     cap_add:
       - NET_ADMIN
-      - SYS_MODULE
+      # SYS_MODULE is rarely needed — this container doesn't load kernel modules
+      # itself, it only checks if wireguard/amneziawg is already loaded on the host.
+      # Keep it only on minimal hosts that don't auto-load iptables NAT modules.
+      # - SYS_MODULE
     devices:
       - /dev/net/tun:/dev/net/tun
     environment:
@@ -83,7 +86,7 @@ services:
 #     container_name: amneziawg
 #     cap_add:
 #       - NET_ADMIN
-#       - SYS_MODULE
+#       # - SYS_MODULE  # rarely needed, see main config above
 #     environment:
 #       - PUID=1000
 #       - PGID=1000
@@ -114,7 +117,7 @@ services:
 #     container_name: amneziawg
 #     cap_add:
 #       - NET_ADMIN
-#       - SYS_MODULE
+#       # - SYS_MODULE  # rarely needed, see main config above
 #     environment:
 #       - PUID=1000
 #       - PGID=1000

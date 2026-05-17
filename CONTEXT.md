@@ -175,7 +175,7 @@ Container images are tagged with the upstream `amneziawg-tools` version (e.g., `
 | Issue | Cause | Solution |
 |-------|-------|----------|
 | No config files found | Neither PEERS set nor .conf files present | Set PEERS env var or place configs in `./config/wg_confs/` |
-| Permission denied | Missing capabilities | Add `NET_ADMIN` (required) and `SYS_MODULE` (for kernel module) |
+| Permission denied | Missing capabilities | Add `NET_ADMIN` (required). `SYS_MODULE` is **not** needed for the kernel datapath — the container only checks whether wireguard/amneziawg is already loaded on the host. Keep `SYS_MODULE` only on minimal hosts that don't auto-load iptables NAT modules. |
 | Tunnel fails to start | Missing sysctl or TUN device | Add `net.ipv4.ip_forward=1` sysctl and `/dev/net/tun` device |
 | Exit code 137 | Normal SIGKILL on container stop | Not an error |
 | Custom SERVERPORT not working | Wrong port mapping | Map as `SERVERPORT:51820/udp` — container always listens on 51820 internally |

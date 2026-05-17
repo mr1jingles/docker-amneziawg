@@ -25,7 +25,7 @@ The container runs in two modes:
 
 ### Kernel Module
 
-For best performance, install the [AmneziaWG kernel module](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module) on your host. The container auto-detects kernel support and falls back to the `amneziawg-go` userspace implementation. If the kernel module is loaded, you can drop the `SYS_MODULE` capability.
+For best performance, install the [AmneziaWG kernel module](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module) on your host (or rely on the in-tree `wireguard` module that ships with most modern kernels). The container auto-detects kernel support and falls back to the `amneziawg-go` userspace implementation when no module is loaded. `SYS_MODULE` is **not** required to use the kernel datapath — the container never calls `modprobe`. See the Parameters table below for when (if ever) you might want it.
 
 ### AWG Protocol Version
 
@@ -47,7 +47,7 @@ services:
     container_name: amneziawg
     cap_add:
       - NET_ADMIN
-      - SYS_MODULE #optional
+      # - SYS_MODULE  # rarely needed — see Parameters table
     devices:
       - /dev/net/tun:/dev/net/tun
     environment:
@@ -79,7 +79,7 @@ services:
 docker run -d \
   --name amneziawg \
   --cap-add NET_ADMIN \
-  --cap-add SYS_MODULE `#optional` \
+  `# --cap-add SYS_MODULE  rarely needed; see Parameters table` \
   --device /dev/net/tun:/dev/net/tun \
   -e PUID=1000 \
   -e PGID=1000 \
@@ -130,7 +130,7 @@ docker run -d \
 | `-e AWG_VERSION=2.0` | Protocol version: `2.0` (default, full DPI evasion) or `1.5` (legacy) |
 | `-v /config` | Persistent config volume |
 | `--cap-add NET_ADMIN` | Required for tunnel management |
-| `--cap-add SYS_MODULE` | Optional — only needed if loading kernel module |
+| `--cap-add SYS_MODULE` | Usually not needed. The container does **not** load kernel modules itself — it only checks whether `wireguard`/`amneziawg` is already loaded on the host. Keep `SYS_MODULE` only on minimal hosts that don't auto-load iptables NAT modules. |
 | `--sysctl net.ipv4.ip_forward=1` | Enable IP forwarding |
 | `--device /dev/net/tun` | TUN device access |
 
