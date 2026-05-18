@@ -126,7 +126,7 @@ docker run -d \
 | `-e PERSISTENTKEEPALIVE_PEERS=` | Which peers get keepalive: `all` or comma-separated names/numbers |
 | `-e SERVER_ALLOWEDIPS_PEER_X=` | Per-peer server AllowedIPs for site-to-site VPN |
 | `-e LOG_CONFS=true` | Show generated configs and QR codes in container logs |
-| `-e USE_COREDNS=true` | Enable built-in CoreDNS (auto-disabled in client mode) |
+| `-e USE_COREDNS=true` | Enable/disable built-in CoreDNS. Defaults to `true` in server mode, `false` in client mode. Auto-disables when port 53 is already bound unless explicitly set. **Warning:** setting `false` in server mode breaks DNS for peers that use `PEERDNS=auto` (the default) — set `PEERDNS` to a public resolver like `1.1.1.1` if you disable CoreDNS |
 | `-e AWG_VERSION=2.0` | Protocol version: `2.0` (default, full DPI evasion) or `1.5` (legacy) |
 | `-v /config` | Persistent config volume |
 | `--cap-add NET_ADMIN` | Required for tunnel management |
