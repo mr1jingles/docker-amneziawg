@@ -5,9 +5,9 @@
 [![GitHub release](https://img.shields.io/github/v/release/AYastrebov/docker-amneziawg)](https://github.com/AYastrebov/docker-amneziawg/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-[AmneziaWG](https://docs.amnezia.org/) VPN container with automatic config generation, peer management, and QR code support. Built on [LinuxServer.io](https://www.linuxserver.io/) base images with s6-overlay.
+[AmneziaWG](https://docs.amnezia.org/) VPN container that generates configs, manages peers, and prints QR codes. Based on [LinuxServer.io](https://www.linuxserver.io/) base images with s6-overlay.
 
-AmneziaWG extends WireGuard with traffic obfuscation to bypass Deep Packet Inspection (DPI). AWG 2.0 (default) auto-generates all obfuscation parameters including Custom Protocol Signatures (I1-I5) — works out of the box with no manual tuning.
+AmneziaWG extends WireGuard with traffic obfuscation to bypass Deep Packet Inspection (DPI). AWG 2.0 (default) auto-generates all obfuscation parameters including Custom Protocol Signatures (I1-I5), so you don't need to configure them manually.
 
 ## Supported Architectures
 
