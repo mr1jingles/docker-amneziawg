@@ -5,7 +5,7 @@
 
 # Upstream version defaults — override via --build-arg or CI
 ARG AMNEZIAWG_GO_VERSION=v0.2.19
-ARG AMNEZIAWG_TOOLS_VERSION=v1.0.20260618
+ARG AMNEZIAWG_TOOLS_VERSION=v1.0.20260618-2
 
 # ============================================================================
 # Stage 1: Compile amneziawg-go
